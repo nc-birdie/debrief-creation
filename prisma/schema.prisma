@@ -1,0 +1,186 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "sqlite"
+}
+
+// ── Core Models ──────────────────────────────────────────────────────────
+
+model Campaign {
+  id              String   @id @default(cuid())
+  name            String
+  slug            String   @unique
+  description     String   @default("")
+  status          String   @default("setup") // setup | in_progress | completed
+  currentStep     Int      @default(1)
+  briefAssessment String?  // JSON: assessment result from AI
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  sources          Source[]
+  steps            StepState[]
+  agentRuns        AgentRun[]
+  knowledgeEntries KnowledgeEntry[]
+}
+
+model Source {
+  id         String   @id @default(cuid())
+  campaignId String
+  campaign   Campaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  name       String
+  filePath   String
+  fileType   String   @default("text") // text | pdf | markdown | notes
+  sizeBytes  Int      @default(0)
+  summary    String?
+  ingested   Boolean  @default(false)
+  createdAt  DateTime @default(now())
+
+  knowledgeEntries KnowledgeEntry[]
+
+  @@index([campaignId])
+}
+
+model KnowledgeEntry {
+  id         String   @id @default(cuid())
+  campaignId String
+  campaign   Campaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  area       String   // e.g. "product_technology", "market_context"
+  title      String
+  content    String
+  sourceId   String?
+  source     Source?  @relation(fields: [sourceId], references: [id], onDelete: SetNull)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@index([campaignId])
+  @@index([campaignId, area])
+}
+
+model StepState {
+  id            String    @id @default(cuid())
+  campaignId    String
+  campaign      Campaign  @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  stepNumber    Int
+  status        String    @default("pending") // pending | generating | review | approved | skipped
+  aiDraft       String?
+  userEdits     String?
+  finalOutput   String?
+  knowledgeGaps String    @default("[]") // JSON array
+  decisions     String    @default("[]") // JSON array
+  generatedAt   DateTime?
+  approvedAt    DateTime?
+  updatedAt     DateTime  @updatedAt
+
+  @@unique([campaignId, stepNumber])
+  @@index([campaignId])
+}
+
+model AgentRun {
+  id           String    @id @default(cuid())
+  campaignId   String
+  campaign     Campaign  @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  stepNumber   Int
+  phase        String    @default("generate") // generate | research | refine
+  status       String    @default("pending")  // pending | running | completed | failed | cancelled
+  systemPrompt String    @default("")
+  prompt       String    @default("")
+  result       String?
+  turnsUsed    Int       @default(0)
+  startedAt    DateTime?
+  completedAt  DateTime?
+  createdAt    DateTime  @default(now())
+
+  messages AgentMessage[]
+
+  @@index([campaignId])
+}
+
+model AgentMessage {
+  id         String   @id @default(cuid())
+  runId      String
+  run        AgentRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+  role       String   // system | user | assistant
+  content    String
+  turnNumber Int      @default(0)
+  createdAt  DateTime @default(now())
+
+  @@index([runId])
+}
+
+// ── Admin Configuration ──────────────────────────────────────────────────
+
+// ── Briefing Template ────────────────────────────────────────────────────
+
+model BriefingCategory {
+  id        String   @id @default(cuid())
+  label     String
+  sortOrder Int      @default(0)
+  enabled   Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  questions BriefingTemplateQuestion[]
+}
+
+model BriefingTemplateQuestion {
+  id         String           @id @default(cuid())
+  categoryId String
+  category   BriefingCategory @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+  question   String
+  enabled    Boolean          @default(true)
+  sortOrder  Int              @default(0)
+  createdAt  DateTime         @default(now())
+  updatedAt  DateTime         @updatedAt
+
+  @@index([categoryId])
+}
+
+// ── Step Definitions (dynamic, editable from admin) ──────────────────────
+
+model StepDef {
+  id                 String   @id @default(cuid())
+  number             Int      @unique
+  title              String
+  shortTitle         String
+  description        String   @default("")
+  dependsOn          String   @default("[]")  // JSON array of step numbers
+  promptHint         String   @default("")
+  // Config
+  customInstructions String   @default("")
+  outputFormat       String   @default("")
+  outputDisplay      String   @default("prose") // prose | bullet-cards | table | kpi-grid | statement-cards
+  allowedTools       String   @default("[]") // JSON array of tool names
+  maxTurns           Int      @default(10)
+  enabled            Boolean  @default(true)
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  assignments StepAgentAssignment[]
+}
+
+model SubAgentDef {
+  id           String   @id @default(cuid())
+  name         String
+  description  String   @default("")
+  systemPrompt String   @default("")
+  outputFormat String   @default("")
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  assignments StepAgentAssignment[]
+}
+
+model StepAgentAssignment {
+  id        String      @id @default(cuid())
+  stepDefId String
+  stepDef   StepDef     @relation(fields: [stepDefId], references: [id], onDelete: Cascade)
+  agentId   String
+  agent     SubAgentDef @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  runOrder  Int         @default(0)
+
+  @@unique([stepDefId, agentId])
+  @@index([stepDefId])
+}
