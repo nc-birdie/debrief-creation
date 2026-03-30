@@ -20,6 +20,16 @@ export function StepDisplay({ content, displayType, className }: StepDisplayProp
       return <KpiGrid content={content} className={className} />;
     case "statement-cards":
       return <StatementCards content={content} className={className} />;
+    case "swot-grid":
+      return <SwotGrid content={content} className={className} />;
+    case "timeline":
+      return <Timeline content={content} className={className} />;
+    case "comparison":
+      return <Comparison content={content} className={className} />;
+    case "checklist":
+      return <Checklist content={content} className={className} />;
+    case "ranked-list":
+      return <RankedList content={content} className={className} />;
     case "prose":
     default:
       return <RenderedMarkdown content={content} className={className} />;
@@ -373,6 +383,435 @@ function CellContent({ value, isFirstCol }: { value: string; isFirstCol: boolean
   }
 
   return <span>{value}</span>;
+}
+
+// ── SWOT Grid ──
+// 2×2 quadrant analysis — expects h3 sections matching Strengths/Weaknesses/Opportunities/Threats
+
+const SWOT_QUADRANTS = [
+  { key: "strengths", label: "Strengths", color: "bg-emerald-500/10 border-emerald-500/30 text-emerald-700 dark:text-emerald-400" },
+  { key: "weaknesses", label: "Weaknesses", color: "bg-red-500/10 border-red-500/30 text-red-700 dark:text-red-400" },
+  { key: "opportunities", label: "Opportunities", color: "bg-blue-500/10 border-blue-500/30 text-blue-700 dark:text-blue-400" },
+  { key: "threats", label: "Threats", color: "bg-amber-500/10 border-amber-500/30 text-amber-700 dark:text-amber-400" },
+];
+
+function SwotGrid({ content, className }: { content: string; className?: string }) {
+  const quadrants = useMemo(() => {
+    const cards = parseH3Sections(content);
+    return SWOT_QUADRANTS.map((q) => {
+      const match = cards.find(
+        (c) => c.title.toLowerCase().includes(q.key)
+      );
+      // Collect bullet points from body + metadata values
+      const items: string[] = [];
+      if (match) {
+        // Parse bullet lines from the raw section
+        const sectionMatch = content.split(/^###\s+/m).find(
+          (s) => s.toLowerCase().startsWith(q.key) || s.toLowerCase().includes(q.label.toLowerCase())
+        );
+        if (sectionMatch) {
+          for (const line of sectionMatch.split("\n")) {
+            const bullet = line.match(/^[-*]\s+(.+)/);
+            if (bullet) items.push(bullet[1].trim());
+          }
+        }
+        // Fallback: use metadata values and body
+        if (items.length === 0) {
+          match.metadata.forEach((m) => items.push(`${m.key}: ${m.value}`));
+          if (match.body) items.push(match.body);
+        }
+      }
+      return { ...q, items };
+    });
+  }, [content]);
+
+  const hasContent = quadrants.some((q) => q.items.length > 0);
+  if (!hasContent) {
+    return <RenderedMarkdown content={content} className={className} />;
+  }
+
+  return (
+    <div className={cn("grid grid-cols-2 gap-3", className)}>
+      {quadrants.map((q) => (
+        <div
+          key={q.key}
+          className={cn("rounded-lg border p-4 space-y-2", q.color)}
+        >
+          <h4 className="text-xs font-bold uppercase tracking-wider">{q.label}</h4>
+          {q.items.length > 0 ? (
+            <ul className="space-y-1">
+              {q.items.map((item, i) => (
+                <li key={i} className="text-xs leading-relaxed flex items-start gap-1.5">
+                  <span className="shrink-0 mt-1 h-1 w-1 rounded-full bg-current opacity-50" />
+                  <span>{item}</span>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="text-[10px] italic opacity-50">No items</p>
+          )}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// ── Timeline ──
+// Sequential phases/milestones — h3 sections rendered as a vertical timeline
+
+function Timeline({ content, className }: { content: string; className?: string }) {
+  const steps = useMemo(() => parseH3Sections(content), [content]);
+
+  if (steps.length === 0) {
+    return <RenderedMarkdown content={content} className={className} />;
+  }
+
+  return (
+    <div className={cn("relative pl-6", className)}>
+      {/* Vertical line */}
+      <div className="absolute left-[7px] top-2 bottom-2 w-px bg-border" />
+
+      <div className="space-y-4">
+        {steps.map((step, i) => {
+          const timeline = step.metadata.find(
+            (m) => ["timeline", "date", "when", "period", "duration"].includes(m.key.toLowerCase())
+          );
+          const status = step.metadata.find(
+            (m) => m.key.toLowerCase() === "status"
+          );
+          const otherMeta = step.metadata.filter((m) => m !== timeline && m !== status);
+          const isComplete = status?.value.toLowerCase().includes("complete") ||
+                             status?.value.toLowerCase().includes("done");
+
+          return (
+            <div key={i} className="relative">
+              {/* Dot */}
+              <div
+                className={cn(
+                  "absolute -left-6 top-1 h-3.5 w-3.5 rounded-full border-2",
+                  isComplete
+                    ? "bg-primary border-primary"
+                    : i === 0
+                      ? "bg-background border-primary"
+                      : "bg-background border-border"
+                )}
+              />
+
+              <div className="rounded-lg border border-border p-3 space-y-1.5">
+                <div className="flex items-center justify-between gap-2">
+                  <h4 className="text-sm font-semibold">{step.title}</h4>
+                  <div className="flex items-center gap-2 shrink-0">
+                    {status && (
+                      <span
+                        className={cn(
+                          "rounded-full px-2 py-0.5 text-[10px] font-medium",
+                          isComplete
+                            ? "bg-primary/15 text-primary"
+                            : "bg-secondary text-muted-foreground"
+                        )}
+                      >
+                        {status.value}
+                      </span>
+                    )}
+                    {timeline && (
+                      <span className="text-[10px] text-muted-foreground font-medium">
+                        {timeline.value}
+                      </span>
+                    )}
+                  </div>
+                </div>
+
+                {otherMeta.length > 0 && (
+                  <div className="flex flex-wrap gap-x-3 gap-y-1">
+                    {otherMeta.map((m, j) => (
+                      <span key={j} className="text-[10px] text-muted-foreground">
+                        <span className="font-medium text-foreground/70">{m.key}:</span> {m.value}
+                      </span>
+                    ))}
+                  </div>
+                )}
+
+                {step.body && (
+                  <p className="text-xs text-muted-foreground leading-relaxed">{step.body}</p>
+                )}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// ── Comparison ──
+// Side-by-side option comparison — h3 sections as columns with shared metadata dimensions
+
+function Comparison({ content, className }: { content: string; className?: string }) {
+  const options = useMemo(() => parseH3Sections(content), [content]);
+
+  if (options.length < 2) {
+    return <RenderedMarkdown content={content} className={className} />;
+  }
+
+  // Collect all unique metadata keys across options
+  const allKeys = Array.from(
+    new Set(options.flatMap((o) => o.metadata.map((m) => m.key)))
+  );
+
+  return (
+    <div className={cn("space-y-3", className)}>
+      <div className="overflow-x-auto rounded-lg border border-border">
+        <table className="w-full text-xs">
+          <thead>
+            <tr className="bg-secondary/60">
+              <th className="px-3 py-2.5 text-left font-semibold border-b border-border w-28" />
+              {options.map((opt, i) => (
+                <th key={i} className="px-3 py-2.5 text-left font-semibold border-b border-border">
+                  <div className="flex items-center gap-2">
+                    <span>{opt.title}</span>
+                    {opt.badge && (
+                      <span className="rounded-full bg-primary/10 text-primary px-2 py-0.5 text-[10px] font-medium">
+                        {opt.badge}
+                      </span>
+                    )}
+                  </div>
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {allKeys.map((key, ki) => (
+              <tr key={ki} className="border-b border-border last:border-0">
+                <td className="px-3 py-2 font-medium text-muted-foreground whitespace-nowrap">
+                  {key}
+                </td>
+                {options.map((opt, oi) => {
+                  const val = opt.metadata.find(
+                    (m) => m.key === key
+                  )?.value ?? "—";
+                  return (
+                    <td key={oi} className="px-3 py-2">
+                      <CellContent value={val} isFirstCol={false} />
+                    </td>
+                  );
+                })}
+              </tr>
+            ))}
+            {options.some((o) => o.body) && (
+              <tr className="border-t border-border">
+                <td className="px-3 py-2 font-medium text-muted-foreground align-top">
+                  Summary
+                </td>
+                {options.map((opt, oi) => (
+                  <td key={oi} className="px-3 py-2 text-muted-foreground">
+                    {opt.body || "—"}
+                  </td>
+                ))}
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+// ── Checklist ──
+// Action items with checkbox markers — parses - [ ] and - [x] syntax
+
+function Checklist({ content, className }: { content: string; className?: string }) {
+  const categories = useMemo(() => {
+    const sections = content.split(/^###\s+/m).filter((s) => s.trim());
+
+    if (sections.length === 0) {
+      // No h3 headers — treat entire content as one category
+      const items = parseChecklistItems(content);
+      if (items.length === 0) return [];
+      return [{ title: "", items }];
+    }
+
+    return sections.map((section) => {
+      const lines = section.split("\n");
+      const title = lines[0].trim();
+      const rest = lines.slice(1).join("\n");
+      return { title, items: parseChecklistItems(rest) };
+    }).filter((c) => c.items.length > 0);
+  }, [content]);
+
+  if (categories.length === 0) {
+    return <RenderedMarkdown content={content} className={className} />;
+  }
+
+  const totalItems = categories.reduce((sum, c) => sum + c.items.length, 0);
+  const completedItems = categories.reduce(
+    (sum, c) => sum + c.items.filter((i) => i.checked).length,
+    0
+  );
+
+  return (
+    <div className={cn("space-y-4", className)}>
+      {/* Progress bar */}
+      <div className="flex items-center gap-3">
+        <div className="flex-1 h-1.5 bg-secondary rounded-full overflow-hidden">
+          <div
+            className="h-full bg-primary rounded-full transition-all"
+            style={{ width: `${totalItems > 0 ? (completedItems / totalItems) * 100 : 0}%` }}
+          />
+        </div>
+        <span className="text-[10px] text-muted-foreground font-medium shrink-0">
+          {completedItems}/{totalItems}
+        </span>
+      </div>
+
+      {categories.map((cat, ci) => (
+        <div key={ci} className="space-y-1.5">
+          {cat.title && (
+            <h4 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+              {cat.title}
+            </h4>
+          )}
+          <div className="space-y-1">
+            {cat.items.map((item, ii) => (
+              <div
+                key={ii}
+                className={cn(
+                  "flex items-start gap-2.5 rounded-md border px-3 py-2 transition-colors",
+                  item.checked
+                    ? "border-primary/20 bg-primary/5"
+                    : "border-border"
+                )}
+              >
+                <div
+                  className={cn(
+                    "shrink-0 mt-0.5 h-3.5 w-3.5 rounded border flex items-center justify-center",
+                    item.checked
+                      ? "bg-primary border-primary"
+                      : "border-border"
+                  )}
+                >
+                  {item.checked && (
+                    <svg className="h-2.5 w-2.5 text-primary-foreground" viewBox="0 0 12 12" fill="none">
+                      <path d="M2.5 6L5 8.5L9.5 3.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+                    </svg>
+                  )}
+                </div>
+                <span
+                  className={cn(
+                    "text-xs leading-relaxed",
+                    item.checked && "text-muted-foreground line-through"
+                  )}
+                >
+                  {item.text}
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function parseChecklistItems(text: string): Array<{ text: string; checked: boolean }> {
+  const items: Array<{ text: string; checked: boolean }> = [];
+  for (const line of text.split("\n")) {
+    const match = line.match(/^[-*]\s+\[([ xX])\]\s+(.+)/);
+    if (match) {
+      items.push({ checked: match[1] !== " ", text: match[2].trim() });
+    } else {
+      // Also accept plain bullet items as unchecked
+      const plain = line.match(/^[-*]\s+(.+)/);
+      if (plain) {
+        items.push({ checked: false, text: plain[1].trim() });
+      }
+    }
+  }
+  return items;
+}
+
+// ── Ranked List ──
+// Prioritized items with rank numbers and optional scores
+
+function RankedList({ content, className }: { content: string; className?: string }) {
+  const items = useMemo(() => parseH3Sections(content), [content]);
+
+  if (items.length === 0) {
+    return <RenderedMarkdown content={content} className={className} />;
+  }
+
+  return (
+    <div className={cn("space-y-2", className)}>
+      {items.map((item, i) => {
+        const score = item.metadata.find(
+          (m) => ["score", "rating", "weight", "priority"].includes(m.key.toLowerCase())
+        );
+        const impact = item.metadata.find(
+          (m) => ["impact", "value", "importance"].includes(m.key.toLowerCase())
+        );
+        const effort = item.metadata.find(
+          (m) => ["effort", "cost", "complexity", "difficulty"].includes(m.key.toLowerCase())
+        );
+        const otherMeta = item.metadata.filter(
+          (m) => m !== score && m !== impact && m !== effort
+        );
+
+        return (
+          <div
+            key={i}
+            className="flex items-start gap-3 rounded-lg border border-border p-3 hover:border-primary/20 transition-colors"
+          >
+            {/* Rank number */}
+            <div className="shrink-0 flex items-center justify-center h-7 w-7 rounded-full bg-secondary text-xs font-bold">
+              {i + 1}
+            </div>
+
+            {/* Content */}
+            <div className="flex-1 min-w-0 space-y-1.5">
+              <div className="flex items-center justify-between gap-2">
+                <h4 className="text-sm font-semibold truncate">{item.title}</h4>
+                {score && (
+                  <span className="shrink-0 text-sm font-bold text-primary">
+                    {score.value}
+                  </span>
+                )}
+              </div>
+
+              {(impact || effort) && (
+                <div className="flex items-center gap-3">
+                  {impact && (
+                    <span className="text-[10px]">
+                      <span className="font-medium text-foreground/70">Impact:</span>{" "}
+                      <CellContent value={impact.value} isFirstCol={false} />
+                    </span>
+                  )}
+                  {effort && (
+                    <span className="text-[10px]">
+                      <span className="font-medium text-foreground/70">Effort:</span>{" "}
+                      <CellContent value={effort.value} isFirstCol={false} />
+                    </span>
+                  )}
+                </div>
+              )}
+
+              {otherMeta.length > 0 && (
+                <div className="flex flex-wrap gap-x-3 gap-y-1">
+                  {otherMeta.map((m, j) => (
+                    <span key={j} className="text-[10px] text-muted-foreground">
+                      <span className="font-medium text-foreground/70">{m.key}:</span> {m.value}
+                    </span>
+                  ))}
+                </div>
+              )}
+
+              {item.body && (
+                <p className="text-xs text-muted-foreground leading-relaxed">{item.body}</p>
+              )}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
 }
 
 // ── Parsing helpers ──

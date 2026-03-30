@@ -52,6 +52,11 @@ const DISPLAY_TYPES = [
   { id: "table", label: "Table", description: "Structured data table" },
   { id: "kpi-grid", label: "KPI Grid", description: "Metric tiles with targets" },
   { id: "statement-cards", label: "Statements", description: "Get/To/By strategy cards" },
+  { id: "swot-grid", label: "SWOT Grid", description: "2×2 quadrant analysis matrix" },
+  { id: "timeline", label: "Timeline", description: "Sequential phases or milestones" },
+  { id: "comparison", label: "Comparison", description: "Side-by-side option comparison" },
+  { id: "checklist", label: "Checklist", description: "Action items with status" },
+  { id: "ranked-list", label: "Ranked List", description: "Prioritized items with scores" },
 ];
 
 export default function AdminPage() {
