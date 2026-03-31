@@ -39,6 +39,12 @@ export interface Decision {
   chosen?: string;
 }
 
+export interface UserSummary {
+  id: string;
+  username: string;
+  displayName: string;
+}
+
 export interface Campaign {
   id: string;
   name: string;
@@ -46,6 +52,7 @@ export interface Campaign {
   description: string;
   status: CampaignStatus;
   currentStep: number;
+  createdBy?: UserSummary | null;
   createdAt: string;
   updatedAt: string;
   sources?: Source[];

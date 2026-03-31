@@ -5,7 +5,6 @@ import type { SourceFileType } from "@/lib/file-types";
 import { areasForPrompt } from "@/lib/knowledge-areas";
 import fs from "node:fs";
 import mammoth from "mammoth";
-
 // Extract text from office documents
 async function extractDocumentText(
   filePath: string,
@@ -17,11 +16,8 @@ async function extractDocumentText(
     return result.value;
   }
   if (ext.endsWith(".doc")) {
-    // .doc (legacy binary) — mammoth only supports .docx
-    // Try reading as text, often contains some readable strings
     try {
       const buf = fs.readFileSync(filePath);
-      // Extract printable ASCII runs from binary
       const text = buf
         .toString("utf-8")
         .replace(/[^\x20-\x7E\n\r\t]/g, " ")
@@ -32,15 +28,6 @@ async function extractDocumentText(
     } catch {
       return null;
     }
-  }
-  if (ext.endsWith(".xlsx") || ext.endsWith(".xls")) {
-    // For spreadsheets, we'd need a library like xlsx
-    // For now, tell the agent to use Read tool
-    return null;
-  }
-  if (ext.endsWith(".pptx") || ext.endsWith(".ppt")) {
-    // For presentations, we'd need a parser
-    return null;
   }
   return null;
 }
@@ -75,6 +62,31 @@ Rules:
 - If a fact could fit multiple areas, categorize by its primary relevance
 - Use "other" only when no other area fits`;
 
+/**
+ * Run extraction via agent SDK. For text files (no tools), uses maxTurns: 1.
+ * For binary files (needs Read tool), uses maxTurns: 5.
+ */
+async function extractViaAgent(
+  prompt: string,
+  allowedTools: string[]
+): Promise<string> {
+  const { query } = await import("@anthropic-ai/claude-agent-sdk");
+  let agentResult = "";
+  for await (const message of query({
+    prompt,
+    options: {
+      systemPrompt: EXTRACTION_SYSTEM_PROMPT,
+      allowedTools,
+      maxTurns: allowedTools.length > 0 ? 5 : 1,
+    },
+  })) {
+    if ("result" in message) {
+      agentResult = message.result;
+    }
+  }
+  return agentResult;
+}
+
 export async function POST(
   req: Request,
   { params }: { params: Promise<{ campaignId: string }> }
@@ -95,157 +107,122 @@ export async function POST(
     return NextResponse.json({ message: "No sources to ingest" });
   }
 
-  const results: Array<{
-    id: string;
-    name: string;
-    status: string;
-    entriesCreated?: number;
-    error?: string;
-  }> = [];
-
-  for (const source of sources) {
-    try {
-      if (!fs.existsSync(source.filePath)) {
-        results.push({
-          id: source.id,
-          name: source.name,
-          status: "failed",
-          error: "File not found",
-        });
-        continue;
-      }
-
-      const fileType = source.fileType as SourceFileType;
-      let extracted: {
-        summary: string;
-        entries: Array<{ area: string; title: string; content: string }>;
-      };
-
+  // Ingest all sources in parallel
+  const results = await Promise.all(
+    sources.map(async (source): Promise<{
+      id: string;
+      name: string;
+      status: string;
+      entriesCreated?: number;
+      error?: string;
+    }> => {
       try {
-        const { query } = await import("@anthropic-ai/claude-agent-sdk");
+        if (!fs.existsSync(source.filePath)) {
+          return { id: source.id, name: source.name, status: "failed", error: "File not found" };
+        }
 
-        let prompt: string;
-        let allowedTools: string[];
+        const fileType = source.fileType as SourceFileType;
+        let extracted: {
+          summary: string;
+          entries: Array<{ area: string; title: string; content: string }>;
+        };
 
-        // For document types (docx, doc, etc.), try server-side text extraction first
-        if (fileType === "document") {
-          const docText = await extractDocumentText(source.filePath, fileType);
-          if (docText && docText.length > 50) {
+        try {
+          // Determine if we can use the fast API path or need agent tools
+          let textContent: string | null = null;
+
+          if (fileType === "document") {
+            textContent = await extractDocumentText(source.filePath, fileType);
+          } else if (isReadableAsText(fileType)) {
+            textContent = fs.readFileSync(source.filePath, "utf-8");
+          }
+
+          if (textContent && textContent.length > 50) {
+            // Text is in memory — no tools needed, single-turn agent call
             const truncated =
-              docText.length > 30000
-                ? docText.slice(0, 30000) + "\n\n[...truncated at 30k chars]"
-                : docText;
-            prompt = [
+              textContent.length > 30000
+                ? textContent.slice(0, 30000) + "\n\n[...truncated at 30k chars]"
+                : textContent;
+
+            const prompt = [
               `Extract all knowledge entries from this document:`,
               ``,
               `File: ${source.name} (${fileType})`,
               `---`,
               truncated,
             ].join("\n");
-            allowedTools = [];
-          } else {
-            // Extraction failed — fall back to agent Read tool
-            prompt = [
+
+            const result = await extractViaAgent(prompt, []);
+            extracted = parseExtractionResult(result, source.name);
+          } else if (isBinaryFile(fileType)) {
+            // Slow path: need agent with Read tool for PDFs, images, notebooks
+            const prompt = [
               `Read the file at: ${source.filePath}`,
+              ``,
               `File type: ${fileType}, File name: ${source.name}`,
-              `Use the Read tool to access the file content, then extract ALL knowledge entries.`,
-            ].join("\n");
-            allowedTools = ["Read", "Glob", "Grep"];
-          }
-        } else if (isBinaryFile(fileType)) {
-          prompt = [
-            `Read the file at: ${source.filePath}`,
-            ``,
-            `File type: ${fileType}, File name: ${source.name}`,
-            ``,
-            `Use the Read tool to access the file content.`,
-            fileType === "pdf"
-              ? `This is a PDF — Read will render its text content. If it's large, read the first 10-15 pages.`
-              : "",
-            fileType === "image"
-              ? `This is an image — Read will show you the visual content. Extract any text, data, diagrams, or strategic information you can see.`
-              : "",
-            fileType === "notebook"
-              ? `This is a Jupyter notebook — Read will show cells with code, text, and outputs.`
-              : "",
-            ``,
-            `Then extract ALL knowledge entries from the content as described in your instructions.`,
-          ]
-            .filter(Boolean)
-            .join("\n");
-          allowedTools = ["Read", "Glob", "Grep"];
-        } else {
-          const content = fs.readFileSync(source.filePath, "utf-8");
-          const truncated =
-            content.length > 30000
-              ? content.slice(0, 30000) + "\n\n[...truncated at 30k chars]"
-              : content;
+              ``,
+              `Use the Read tool to access the file content.`,
+              fileType === "pdf"
+                ? `This is a PDF — Read will render its text content. If it's large, read the first 10-15 pages.`
+                : "",
+              fileType === "image"
+                ? `This is an image — Read will show you the visual content. Extract any text, data, diagrams, or strategic information you can see.`
+                : "",
+              fileType === "notebook"
+                ? `This is a Jupyter notebook — Read will show cells with code, text, and outputs.`
+                : "",
+              ``,
+              `Then extract ALL knowledge entries from the content as described in your instructions.`,
+            ]
+              .filter(Boolean)
+              .join("\n");
 
-          prompt = [
-            `Extract all knowledge entries from this document:`,
-            ``,
-            `File: ${source.name} (${fileType})`,
-            `---`,
-            truncated,
-          ].join("\n");
-          allowedTools = [];
+            const result = await extractViaAgent(prompt, ["Read", "Glob", "Grep"]);
+            extracted = parseExtractionResult(result, source.name);
+          } else {
+            // Fallback for edge cases
+            extracted = await fallbackExtraction(source);
+          }
+        } catch {
+          extracted = await fallbackExtraction(source);
         }
 
-        let agentResult = "";
-        for await (const message of query({
-          prompt,
-          options: {
-            systemPrompt: EXTRACTION_SYSTEM_PROMPT,
-            allowedTools,
-            maxTurns: allowedTools.length > 0 ? 5 : 1,
-          },
-        })) {
-          if ("result" in message) {
-            agentResult = message.result;
-          }
-        }
-
-        extracted = parseExtractionResult(agentResult, source.name);
-      } catch {
-        // Fallback: create entries from raw text (with docx support)
-        extracted = await fallbackExtraction(source);
-      }
-
-      // Save summary on source
-      await prisma.source.update({
-        where: { id: source.id },
-        data: { summary: extracted.summary, ingested: true },
-      });
-
-      // Create knowledge entries
-      if (extracted.entries.length > 0) {
-        await prisma.knowledgeEntry.createMany({
-          data: extracted.entries.map((e) => ({
-            campaignId,
-            sourceId: source.id,
-            area: e.area,
-            title: e.title,
-            content: e.content,
-          })),
+        // Save summary on source
+        await prisma.source.update({
+          where: { id: source.id },
+          data: { summary: extracted.summary, ingested: true },
         });
-      }
 
-      results.push({
-        id: source.id,
-        name: source.name,
-        status: "ingested",
-        entriesCreated: extracted.entries.length,
-      });
-    } catch (err) {
-      console.error(`Ingest failed for ${source.name}:`, err);
-      results.push({
-        id: source.id,
-        name: source.name,
-        status: "failed",
-        error: err instanceof Error ? err.message : "Unknown error",
-      });
-    }
-  }
+        // Create knowledge entries
+        if (extracted.entries.length > 0) {
+          await prisma.knowledgeEntry.createMany({
+            data: extracted.entries.map((e) => ({
+              campaignId,
+              sourceId: source.id,
+              area: e.area,
+              title: e.title,
+              content: e.content,
+            })),
+          });
+        }
+
+        return {
+          id: source.id,
+          name: source.name,
+          status: "ingested",
+          entriesCreated: extracted.entries.length,
+        };
+      } catch (err) {
+        console.error(`Ingest failed for ${source.name}:`, err);
+        return {
+          id: source.id,
+          name: source.name,
+          status: "failed",
+          error: err instanceof Error ? err.message : "Unknown error",
+        };
+      }
+    })
+  );
 
   return NextResponse.json({ results });
 }
@@ -257,7 +234,6 @@ function parseExtractionResult(
   summary: string;
   entries: Array<{ area: string; title: string; content: string }>;
 } {
-  // Try markdown code fence
   const fenceMatch = text.match(/```(?:json)?\s*\n([\s\S]*?)\n```/);
   if (fenceMatch) {
     try {
@@ -276,7 +252,6 @@ function parseExtractionResult(
     }
   }
 
-  // Try raw JSON
   const jsonMatch = text.match(/\{[\s\S]*\}/);
   if (jsonMatch) {
     try {
@@ -295,7 +270,6 @@ function parseExtractionResult(
     }
   }
 
-  // Couldn't parse JSON — treat the whole text as a single "other" entry
   return {
     summary: sourceName,
     entries: [
@@ -319,7 +293,6 @@ async function fallbackExtraction(source: {
 }> {
   const ft = source.fileType as SourceFileType;
 
-  // Try document text extraction for office files
   if (ft === "document") {
     const docText = await extractDocumentText(source.filePath, ft);
     if (docText && docText.length > 50) {
@@ -340,7 +313,6 @@ async function fallbackExtraction(source: {
     };
   }
 
-  // Split text content into paragraph-based entries
   const content = fs.readFileSync(source.filePath, "utf-8");
   return splitTextIntoEntries(content, source.name);
 }

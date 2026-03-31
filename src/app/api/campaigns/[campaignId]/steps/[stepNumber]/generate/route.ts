@@ -12,11 +12,13 @@ export async function POST(
   const { campaignId, stepNumber } = await params;
   const stepNum = parseInt(stepNumber, 10);
 
-  // Parse optional additional context from request body
+  // Parse request body
   let additionalContext = "";
+  let refineMode = false;
   try {
     const body = await req.json();
     if (body.additionalContext) additionalContext = body.additionalContext;
+    if (body.refine) refineMode = true;
   } catch {
     // No body or not JSON — that's fine
   }
@@ -112,23 +114,60 @@ export async function POST(
       .join("");
 
     // Build user prompt
-    const userPrompt = [
-      `Generate a comprehensive draft for Step ${stepNum}: "${stepDef.title}"`,
-      `\n\n${stepDef.description}`,
-      `\n\n${stepDef.promptHint}`,
-      additionalContext
-        ? `\n\n== ADDITIONAL CONTEXT FROM USER ==\n${additionalContext}`
-        : "",
-      stepDef.outputFormat
-        ? `\n\nExpected output format: ${stepDef.outputFormat}`
-        : "",
-      `\n\nReturn your response as JSON with this structure:`,
-      `{`,
-      `  "draft": "Your markdown content here...",`,
-      `  "knowledgeGaps": [{ "id": "gap-1", "title": "...", "description": "...", "category": "source_needed|research_needed|decision_needed", "resolved": false }],`,
-      `  "decisions": [{ "id": "dec-1", "title": "...", "description": "...", "options": ["A","B","C"], "recommendation": "A", "reasoning": "..." }]`,
-      `}`,
-    ].join("");
+    let userPrompt: string;
+
+    if (refineMode && step.aiDraft) {
+      // Refine mode: update existing draft based on gap resolutions and decisions
+      const existingGaps = JSON.parse(step.knowledgeGaps || "[]");
+      const existingDecisions = JSON.parse(step.decisions || "[]");
+
+      const resolvedGapsSummary = existingGaps
+        .filter((g: { resolved: boolean; title: string; resolution?: string }) => g.resolved && g.resolution)
+        .map((g: { title: string; resolution: string }) => `- **${g.title}**: ${g.resolution}`)
+        .join("\n");
+
+      const madeDecisionsSummary = existingDecisions
+        .filter((d: { chosen?: string }) => d.chosen && d.chosen !== "__DEFERRED__")
+        .map((d: { title: string; chosen: string }) => `- **${d.title}**: ${d.chosen}`)
+        .join("\n");
+
+      userPrompt = [
+        `Refine the existing draft for Step ${stepNum}: "${stepDef.title}"`,
+        `\n\n== CURRENT DRAFT ==\n${step.aiDraft}`,
+        resolvedGapsSummary ? `\n\n== NEW INFORMATION (from resolved knowledge gaps) ==\n${resolvedGapsSummary}` : "",
+        madeDecisionsSummary ? `\n\n== DECISIONS MADE ==\n${madeDecisionsSummary}` : "",
+        additionalContext ? `\n\n== ADDITIONAL CONTEXT FROM USER ==\n${additionalContext}` : "",
+        step.userEdits ? `\n\n== USER NOTES ==\n${step.userEdits}` : "",
+        `\n\nUpdate the draft to incorporate the new information and decisions above. Keep everything that is still valid. Only change or add sections that are affected by the new input. Mark clearly what you changed.`,
+        stepDef.outputFormat ? `\n\nExpected output format: ${stepDef.outputFormat}` : "",
+        `\n\nReturn your response as JSON with this structure:`,
+        `{`,
+        `  "draft": "Your updated markdown content here...",`,
+        `  "knowledgeGaps": [{ "id": "gap-1", "title": "...", "description": "...", "category": "source_needed|research_needed|decision_needed", "resolved": false }],`,
+        `  "decisions": [{ "id": "dec-1", "title": "...", "description": "...", "options": ["A","B","C"], "recommendation": "A", "reasoning": "..." }]`,
+        `}`,
+        `\n\nIMPORTANT: Only include NEW or REMAINING knowledge gaps and decisions. Do not re-include gaps that have been resolved or decisions that have been made.`,
+      ].join("");
+    } else {
+      // Full generation mode
+      userPrompt = [
+        `Generate a comprehensive draft for Step ${stepNum}: "${stepDef.title}"`,
+        `\n\n${stepDef.description}`,
+        `\n\n${stepDef.promptHint}`,
+        additionalContext
+          ? `\n\n== ADDITIONAL CONTEXT FROM USER ==\n${additionalContext}`
+          : "",
+        stepDef.outputFormat
+          ? `\n\nExpected output format: ${stepDef.outputFormat}`
+          : "",
+        `\n\nReturn your response as JSON with this structure:`,
+        `{`,
+        `  "draft": "Your markdown content here...",`,
+        `  "knowledgeGaps": [{ "id": "gap-1", "title": "...", "description": "...", "category": "source_needed|research_needed|decision_needed", "resolved": false }],`,
+        `  "decisions": [{ "id": "dec-1", "title": "...", "description": "...", "options": ["A","B","C"], "recommendation": "A", "reasoning": "..." }]`,
+        `}`,
+      ].join("");
+    }
 
     // Try to use Claude Agent SDK
     let result: {

@@ -21,6 +21,9 @@ import {
   BookOpen,
   ClipboardCheck,
   Sparkles,
+  Search,
+  FlaskConical,
+  Lock,
 } from "lucide-react";
 import type { Campaign, Source, KnowledgeEntry, BriefAssessment } from "@/lib/types";
 import { cn } from "@/lib/utils";
@@ -48,12 +51,13 @@ function formatBytes(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-type SetupStep = "sources" | "context" | "assessment";
+type SetupStep = "sources" | "context" | "assessment" | "research";
 
 const SETUP_STEPS: { id: SetupStep; label: string; icon: typeof FileText }[] = [
   { id: "sources", label: "Sources", icon: Upload },
   { id: "context", label: "Program Context", icon: BookOpen },
   { id: "assessment", label: "Brief Assessment", icon: ClipboardCheck },
+  { id: "research", label: "AI Research", icon: Search },
 ];
 
 export default function CampaignSetup({
@@ -81,6 +85,18 @@ export default function CampaignSetup({
   const [dragOver, setDragOver] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [activeSetupStep, setActiveSetupStep] = useState<SetupStep>("sources");
+
+  // AI Research state
+  const [researching, setResearching] = useState(false);
+  const [researchFindings, setResearchFindings] = useState<
+    Array<{
+      category: string;
+      findings: Array<{ area: string; title: string; content: string; sources: string[] }>;
+      status: string;
+    }>
+  >([]);
+  const [selectedFindings, setSelectedFindings] = useState<Set<string>>(new Set());
+  const [importing, setImporting] = useState(false);
 
   // Manual path / folder input
   const [showManual, setShowManual] = useState(false);
@@ -208,30 +224,24 @@ export default function CampaignSetup({
   async function ingestAll() {
     setIngestingAll(true);
     setError(null);
-    const uningestedSources = sources.filter((s) => !s.ingested);
-    const errors: string[] = [];
-    for (const source of uningestedSources) {
-      setIngestingSource(source.id);
-      try {
-        const res = await fetch(
-          `/api/campaigns/${campaignId}/ingest?sourceId=${source.id}`,
-          { method: "POST" }
+    try {
+      const res = await fetch(
+        `/api/campaigns/${campaignId}/ingest`,
+        { method: "POST" }
+      );
+      if (res.ok) {
+        const data = await res.json();
+        const failed = data.results?.filter(
+          (r: { status: string }) => r.status === "failed"
         );
-        if (res.ok) {
-          const data = await res.json();
-          const failed = data.results?.filter(
-            (r: { status: string }) => r.status === "failed"
-          );
-          if (failed?.length) {
-            errors.push(`${source.name}: ${failed[0]?.error || "Failed"}`);
-          }
+        if (failed?.length) {
+          setError(failed.map((f: { name: string; error?: string }) => `${f.name}: ${f.error || "Failed"}`).join(". "));
         }
-      } catch {
-        errors.push(`${source.name}: Ingestion failed`);
       }
-      await fetchData();
+    } catch {
+      setError("Ingestion failed");
     }
-    if (errors.length > 0) setError(errors.join(". "));
+    await fetchData();
     setIngestingSource(null);
     setIngestingAll(false);
   }
@@ -282,6 +292,7 @@ export default function CampaignSetup({
   // Determine which steps are unlocked
   const canGoToContext = ingestedCount > 0;
   const canGoToAssessment = hasContext;
+  const canGoToResearch = briefAssessment !== null;
 
   return (
     <div className="min-h-screen">
@@ -307,12 +318,14 @@ export default function CampaignSetup({
               const isActive = activeSetupStep === step.id;
               const isLocked =
                 (step.id === "context" && !canGoToContext) ||
-                (step.id === "assessment" && !canGoToAssessment);
+                (step.id === "assessment" && !canGoToAssessment) ||
+                (step.id === "research" && !canGoToResearch);
               const Icon = step.icon;
               const isDone =
                 (step.id === "sources" && ingestedCount > 0) ||
                 (step.id === "context" && hasContext) ||
-                (step.id === "assessment" && briefAssessment !== null);
+                (step.id === "assessment" && briefAssessment !== null) ||
+                (step.id === "research" && researchFindings.length > 0);
 
               return (
                 <button
@@ -600,6 +613,38 @@ export default function CampaignSetup({
               />
             </section>
 
+            {/* Birdie Studio Ingest — Beta (disabled) */}
+            <section className="rounded-lg border border-border bg-card p-6 opacity-60">
+              <div className="flex items-start gap-4">
+                <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-secondary shrink-0">
+                  <FlaskConical className="h-5 w-5 text-muted-foreground" />
+                </div>
+                <div className="flex-1">
+                  <div className="flex items-center gap-2 mb-1">
+                    <h3 className="text-sm font-semibold">Birdie Studio Ingest</h3>
+                    <span className="inline-flex items-center gap-1 rounded-full bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400 px-2 py-0.5 text-[10px] font-medium">
+                      <FlaskConical className="h-2.5 w-2.5" />
+                      Beta
+                    </span>
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    Automatically pull context from Birdie Studio&apos;s internal knowledge base,
+                    past campaign data, and client history to enrich your program context.
+                  </p>
+                </div>
+                <div className="shrink-0">
+                  <Lock className="h-4 w-4 text-muted-foreground" />
+                </div>
+              </div>
+              <button
+                disabled
+                className="mt-4 w-full flex items-center justify-center gap-2 rounded-md border border-border px-5 py-3 text-sm font-medium text-muted-foreground cursor-not-allowed"
+              >
+                <Lock className="h-3.5 w-3.5" />
+                Coming Soon
+              </button>
+            </section>
+
             {/* Navigation */}
             <div className="flex justify-between pt-2">
               <button
@@ -651,6 +696,270 @@ export default function CampaignSetup({
                 Back to Context
               </button>
               <button
+                onClick={() => setActiveSetupStep("research")}
+                disabled={!canGoToResearch}
+                className="flex items-center gap-2 rounded-md gradient-bg px-5 py-2 text-sm font-medium text-white hover:opacity-90 disabled:opacity-50 transition-opacity"
+              >
+                AI Research
+                <ArrowRight className="h-4 w-4" />
+              </button>
+            </div>
+          </>
+        )}
+
+        {/* ── STEP 4: AI Research ── */}
+        {activeSetupStep === "research" && (() => {
+          const allFindings = researchFindings.flatMap((r, ci) =>
+            r.findings.map((f, fi) => ({ ...f, key: `${ci}-${fi}`, category: r.category }))
+          );
+          const totalFound = allFindings.length;
+          const selectedCount = selectedFindings.size;
+
+          return (
+          <>
+            <section>
+              <h2 className="text-lg font-bold mb-1">AI Research</h2>
+              <p className="text-sm text-muted-foreground">
+                Research knowledge gaps, review findings, then import the ones you want into your program context.
+              </p>
+            </section>
+
+            {/* Research action card */}
+            <section className="rounded-lg border border-border bg-card p-6 space-y-4">
+              <div className="flex items-start gap-4">
+                <div className="flex h-10 w-10 items-center justify-center rounded-lg gradient-bg shrink-0">
+                  <Search className="h-5 w-5 text-white" />
+                </div>
+                <div className="flex-1">
+                  <h3 className="text-sm font-semibold mb-1">Research Gaps & Areas</h3>
+                  <p className="text-xs text-muted-foreground">
+                    The AI will search the web to fill knowledge gaps from your brief assessment.
+                    Results appear below for you to review before importing.
+                  </p>
+                </div>
+              </div>
+
+              {/* Assessment summary */}
+              {briefAssessment && totalFound === 0 && (
+                <div className="rounded-md border border-border bg-secondary/30 p-4">
+                  <h4 className="text-xs font-semibold text-muted-foreground mb-2">Assessment Summary</h4>
+                  <div className="grid grid-cols-3 gap-3 text-center mb-3">
+                    <div className="rounded-md bg-card p-2">
+                      <div className="text-lg font-bold text-green-600">
+                        {briefAssessment.categories.reduce((s, c) => s + c.questions.filter((q) => q.status === "covered").length, 0)}
+                      </div>
+                      <div className="text-[10px] text-muted-foreground">Covered</div>
+                    </div>
+                    <div className="rounded-md bg-card p-2">
+                      <div className="text-lg font-bold text-amber-600">
+                        {briefAssessment.categories.reduce((s, c) => s + c.questions.filter((q) => q.status === "partial").length, 0)}
+                      </div>
+                      <div className="text-[10px] text-muted-foreground">Partial</div>
+                    </div>
+                    <div className="rounded-md bg-card p-2">
+                      <div className="text-lg font-bold text-red-500">
+                        {briefAssessment.categories.reduce((s, c) => s + c.questions.filter((q) => q.status === "gap").length, 0)}
+                      </div>
+                      <div className="text-[10px] text-muted-foreground">Gaps</div>
+                    </div>
+                  </div>
+                  <p className="text-xs text-muted-foreground">{briefAssessment.summary}</p>
+                </div>
+              )}
+
+              <button
+                onClick={async () => {
+                  setResearching(true);
+                  setResearchFindings([]);
+                  setSelectedFindings(new Set());
+                  try {
+                    const res = await fetch(`/api/campaigns/${campaignId}/research`, {
+                      method: "POST",
+                      headers: { "Content-Type": "application/json" },
+                      body: JSON.stringify({}),
+                    });
+                    if (res.ok) {
+                      const data = await res.json();
+                      const results: typeof researchFindings = data.agentResults ?? [];
+                      setResearchFindings(results);
+                      // Auto-select all findings
+                      const allKeys = new Set<string>();
+                      results.forEach((r: { findings: unknown[] }, ci: number) =>
+                        r.findings.forEach((_: unknown, fi: number) => allKeys.add(`${ci}-${fi}`))
+                      );
+                      setSelectedFindings(allKeys);
+                    } else {
+                      const err = await res.json();
+                      setError(err.error || "Research failed");
+                    }
+                  } catch {
+                    setError("Research failed");
+                  }
+                  setResearching(false);
+                }}
+                disabled={researching}
+                className="w-full flex items-center justify-center gap-2 rounded-md gradient-bg px-5 py-3 text-sm font-medium text-white hover:opacity-90 disabled:opacity-50 transition-opacity"
+              >
+                {researching ? (
+                  <>
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                    Researching... This may take a few minutes
+                  </>
+                ) : (
+                  <>
+                    <Sparkles className="h-4 w-4" />
+                    {totalFound > 0 ? "Research Again" : "Start AI Research"}
+                  </>
+                )}
+              </button>
+            </section>
+
+            {/* Findings review */}
+            {totalFound > 0 && (
+              <section className="rounded-lg border border-border bg-card">
+                <div className="flex items-center justify-between px-5 py-3 border-b border-border">
+                  <h3 className="text-sm font-semibold">
+                    Research Findings ({selectedCount} / {totalFound} selected)
+                  </h3>
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => {
+                        if (selectedCount === totalFound) {
+                          setSelectedFindings(new Set());
+                        } else {
+                          setSelectedFindings(new Set(allFindings.map((f) => f.key)));
+                        }
+                      }}
+                      className="text-xs text-primary hover:underline"
+                    >
+                      {selectedCount === totalFound ? "Deselect All" : "Select All"}
+                    </button>
+                    <button
+                      onClick={async () => {
+                        const toImport = allFindings.filter((f) => selectedFindings.has(f.key));
+                        if (toImport.length === 0) return;
+                        setImporting(true);
+                        try {
+                          const res = await fetch(`/api/campaigns/${campaignId}/knowledge`, {
+                            method: "POST",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify({
+                              entries: toImport.map((f) => ({
+                                area: f.area,
+                                title: f.title,
+                                content: f.sources && f.sources.length > 0
+                                  ? `${f.content}\n\nSources:\n${f.sources.map((s: string) => `- ${s}`).join("\n")}`
+                                  : f.content,
+                              })),
+                            }),
+                          });
+                          if (res.ok) {
+                            const data = await res.json();
+                            // Remove imported findings from the list
+                            const remaining = researchFindings.map((r, ci) => ({
+                              ...r,
+                              findings: r.findings.filter((_, fi) => !selectedFindings.has(`${ci}-${fi}`)),
+                            })).filter((r) => r.findings.length > 0);
+                            setResearchFindings(remaining);
+                            setSelectedFindings(new Set());
+                            await fetchData();
+                            setError(null);
+                          }
+                        } catch {
+                          setError("Import failed");
+                        }
+                        setImporting(false);
+                      }}
+                      disabled={importing || selectedCount === 0}
+                      className="flex items-center gap-1.5 rounded-md gradient-bg px-3 py-1.5 text-xs font-medium text-white hover:opacity-90 disabled:opacity-50"
+                    >
+                      {importing ? (
+                        <Loader2 className="h-3 w-3 animate-spin" />
+                      ) : (
+                        <CheckCircle2 className="h-3 w-3" />
+                      )}
+                      Import {selectedCount} to Context
+                    </button>
+                  </div>
+                </div>
+
+                <div className="divide-y divide-border max-h-[600px] overflow-y-auto">
+                  {researchFindings.map((catResult, ci) => (
+                    catResult.status === "ok" && catResult.findings.length > 0 && (
+                      <div key={ci}>
+                        <div className="px-5 py-2 bg-secondary/30 flex items-center justify-between">
+                          <span className="text-xs font-semibold text-muted-foreground">{catResult.category}</span>
+                          <span className="text-[10px] text-muted-foreground">{catResult.findings.length} findings</span>
+                        </div>
+                        {catResult.findings.map((finding, fi) => {
+                          const key = `${ci}-${fi}`;
+                          const isSelected = selectedFindings.has(key);
+                          return (
+                            <label
+                              key={key}
+                              className={cn(
+                                "flex items-start gap-3 px-5 py-3 cursor-pointer transition-colors",
+                                isSelected ? "bg-primary/5" : "hover:bg-secondary/30"
+                              )}
+                            >
+                              <input
+                                type="checkbox"
+                                checked={isSelected}
+                                onChange={(e) => {
+                                  const next = new Set(selectedFindings);
+                                  if (e.target.checked) next.add(key);
+                                  else next.delete(key);
+                                  setSelectedFindings(next);
+                                }}
+                                className="mt-1 shrink-0 rounded border-border"
+                              />
+                              <div className="flex-1 min-w-0">
+                                <div className="flex items-center gap-2 mb-0.5">
+                                  <span className="text-sm font-medium">{finding.title}</span>
+                                  <span className="shrink-0 rounded-full bg-secondary px-1.5 py-0.5 text-[10px] text-muted-foreground">
+                                    {finding.area}
+                                  </span>
+                                </div>
+                                <p className="text-xs text-muted-foreground line-clamp-3">
+                                  {finding.content}
+                                </p>
+                                {finding.sources && finding.sources.length > 0 && (
+                                  <div className="flex flex-wrap gap-x-3 gap-y-1 mt-1.5">
+                                    {finding.sources.map((url: string, si: number) => (
+                                      <a
+                                        key={si}
+                                        href={url}
+                                        target="_blank"
+                                        rel="noopener noreferrer"
+                                        onClick={(e) => e.stopPropagation()}
+                                        className="text-[10px] text-primary hover:underline truncate max-w-[300px]"
+                                      >
+                                        {url.replace(/^https?:\/\/(www\.)?/, "").split("/")[0]}
+                                      </a>
+                                    ))}
+                                  </div>
+                                )}
+                              </div>
+                            </label>
+                          );
+                        })}
+                      </div>
+                    )
+                  ))}
+                </div>
+              </section>
+            )}
+
+            {/* Navigation */}
+            <div className="flex justify-between pt-2">
+              <button
+                onClick={() => setActiveSetupStep("assessment")}
+                className="flex items-center gap-2 rounded-md border border-border px-5 py-2 text-sm font-medium hover:bg-secondary transition-colors"
+              >
+                <ArrowLeft className="h-4 w-4" />
+                Back to Assessment
+              </button>
+              <button
                 onClick={startWorkshop}
                 className="flex items-center gap-2 rounded-md gradient-bg px-6 py-2.5 text-sm font-medium text-white hover:opacity-90 transition-opacity"
               >
@@ -659,7 +968,8 @@ export default function CampaignSetup({
               </button>
             </div>
           </>
-        )}
+          );
+        })()}
       </main>
     </div>
   );

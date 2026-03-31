@@ -1,9 +1,13 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
+import { getCurrentUser } from "@/lib/user";
 
 export async function GET() {
   const campaigns = await prisma.campaign.findMany({
     orderBy: { updatedAt: "desc" },
+    include: {
+      createdBy: { select: { id: true, username: true, displayName: true } },
+    },
   });
   return NextResponse.json(campaigns);
 }
@@ -27,8 +31,18 @@ export async function POST(req: Request) {
     );
   }
 
+  const user = await getCurrentUser();
+
   const campaign = await prisma.campaign.create({
-    data: { name, slug, description: description ?? "" },
+    data: {
+      name,
+      slug,
+      description: description ?? "",
+      createdById: user.id,
+    },
+    include: {
+      createdBy: { select: { id: true, username: true, displayName: true } },
+    },
   });
 
   // Create step states for all enabled step definitions

@@ -35,7 +35,7 @@ export async function GET() {
   return NextResponse.json(steps.map(serializeStepDef));
 }
 
-// POST — create a new step
+// POST — create a new step (supports optional insertAt for positioning)
 export async function POST(req: Request) {
   const body = await req.json();
 
@@ -46,15 +46,62 @@ export async function POST(req: Request) {
     );
   }
 
-  // Assign next number
   const maxNum = await prisma.stepDef.aggregate({
     _max: { number: true },
   });
-  const nextNumber = (maxNum._max.number ?? 0) + 1;
+  const totalSteps = maxNum._max.number ?? 0;
+  const insertAt =
+    typeof body.insertAt === "number" && body.insertAt >= 1
+      ? Math.min(body.insertAt, totalSteps + 1)
+      : totalSteps + 1;
+
+  // If inserting in the middle, shift existing steps down
+  if (insertAt <= totalSteps) {
+    // Shift to temp numbers to avoid unique constraint
+    const toShift = await prisma.stepDef.findMany({
+      where: { number: { gte: insertAt } },
+      orderBy: { number: "desc" },
+    });
+    const offset = totalSteps + 100;
+    for (const s of toShift) {
+      await prisma.stepDef.update({
+        where: { id: s.id },
+        data: { number: offset + s.number },
+      });
+    }
+    // Now shift to final numbers
+    for (const s of toShift) {
+      const newNum = s.number + 1;
+      // Update dependsOn references: increment any dep >= insertAt
+      const deps: number[] = JSON.parse(s.dependsOn);
+      const updatedDeps = deps.map((d) => (d >= insertAt ? d + 1 : d));
+      await prisma.stepDef.update({
+        where: { id: s.id },
+        data: {
+          number: newNum,
+          dependsOn: JSON.stringify(updatedDeps),
+        },
+      });
+    }
+    // Also update dependsOn in steps that weren't shifted
+    const unshifted = await prisma.stepDef.findMany({
+      where: { number: { lt: insertAt } },
+    });
+    for (const s of unshifted) {
+      const deps: number[] = JSON.parse(s.dependsOn);
+      const updatedDeps = deps.map((d) => (d >= insertAt ? d + 1 : d));
+      if (JSON.stringify(deps) !== JSON.stringify(updatedDeps)) {
+        await prisma.stepDef.update({
+          where: { id: s.id },
+          data: { dependsOn: JSON.stringify(updatedDeps) },
+        });
+      }
+    }
+  }
 
   const step = await prisma.stepDef.create({
     data: {
-      number: nextNumber,
+      number: insertAt,
       title: body.title.trim(),
       shortTitle: body.shortTitle.trim(),
       description: body.description?.trim() ?? "",

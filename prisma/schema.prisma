@@ -7,6 +7,18 @@ datasource db {
   provider = "sqlite"
 }
 
+// ── Users ────────────────────────────────────────────────────────────────
+
+model User {
+  id          String   @id @default(cuid())
+  username    String   @unique // OS username, auto-detected
+  displayName String   @default("")
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  campaigns Campaign[]
+}
+
 // ── Core Models ──────────────────────────────────────────────────────────
 
 model Campaign {
@@ -17,6 +29,8 @@ model Campaign {
   status          String   @default("setup") // setup | in_progress | completed
   currentStep     Int      @default(1)
   briefAssessment String?  // JSON: assessment result from AI
+  createdById     String?
+  createdBy       User?    @relation(fields: [createdById], references: [id], onDelete: SetNull)
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 
@@ -24,6 +38,8 @@ model Campaign {
   steps            StepState[]
   agentRuns        AgentRun[]
   knowledgeEntries KnowledgeEntry[]
+
+  @@index([createdById])
 }
 
 model Source {
@@ -122,7 +138,8 @@ model BriefingCategory {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  questions BriefingTemplateQuestion[]
+  questions      BriefingTemplateQuestion[]
+  researchAgent  ResearchAgentDef?
 }
 
 model BriefingTemplateQuestion {
@@ -136,6 +153,21 @@ model BriefingTemplateQuestion {
   updatedAt  DateTime         @updatedAt
 
   @@index([categoryId])
+}
+
+// ── Research Agents (one per briefing category) ─────────────────────────
+
+model ResearchAgentDef {
+  id           String           @id @default(cuid())
+  categoryId   String           @unique
+  category     BriefingCategory @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+  name         String
+  instructions String           @default("") // System prompt / research instructions
+  allowedTools String           @default("[\"WebSearch\",\"WebFetch\"]") // JSON array
+  maxTurns     Int              @default(10)
+  enabled      Boolean          @default(true)
+  createdAt    DateTime         @default(now())
+  updatedAt    DateTime         @updatedAt
 }
 
 // ── Step Definitions (dynamic, editable from admin) ──────────────────────
@@ -158,29 +190,4 @@ model StepDef {
   createdAt          DateTime @default(now())
   updatedAt          DateTime @updatedAt
 
-  assignments StepAgentAssignment[]
-}
-
-model SubAgentDef {
-  id           String   @id @default(cuid())
-  name         String
-  description  String   @default("")
-  systemPrompt String   @default("")
-  outputFormat String   @default("")
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
-
-  assignments StepAgentAssignment[]
-}
-
-model StepAgentAssignment {
-  id        String      @id @default(cuid())
-  stepDefId String
-  stepDef   StepDef     @relation(fields: [stepDefId], references: [id], onDelete: Cascade)
-  agentId   String
-  agent     SubAgentDef @relation(fields: [agentId], references: [id], onDelete: Cascade)
-  runOrder  Int         @default(0)
-
-  @@unique([stepDefId, agentId])
-  @@index([stepDefId])
 }

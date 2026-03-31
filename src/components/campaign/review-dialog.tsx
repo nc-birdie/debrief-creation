@@ -337,17 +337,34 @@ function DecisionContent({
   onDecide: (chosen: string) => void;
 }) {
   if (decision.chosen) {
+    const isDeferred = decision.chosen === "__DEFERRED__";
     return (
       <div className="space-y-3">
         <div className="flex items-center gap-2">
-          <Check className="h-4 w-4 text-primary" />
+          {isDeferred ? (
+            <SkipForward className="h-4 w-4 text-amber-500" />
+          ) : (
+            <Check className="h-4 w-4 text-primary" />
+          )}
           <h3 className="text-base font-semibold">{decision.title}</h3>
         </div>
-        <div className="rounded-md bg-accent/30 p-3">
+        <div className={cn("rounded-md p-3", isDeferred ? "bg-amber-50/50 dark:bg-amber-950/20" : "bg-accent/30")}>
           <p className="text-sm">
-            <span className="font-medium">Decided:</span> {decision.chosen}
+            {isDeferred ? (
+              <span className="text-amber-600 dark:text-amber-400">Deferred to Final Decisions</span>
+            ) : (
+              <><span className="font-medium">Decided:</span> {decision.chosen}</>
+            )}
           </p>
         </div>
+        {isDeferred && (
+          <button
+            onClick={() => onDecide("")}
+            className="text-xs text-primary hover:underline"
+          >
+            Decide now instead
+          </button>
+        )}
       </div>
     );
   }
@@ -420,6 +437,12 @@ function DecisionContent({
             Choose
           </button>
         </div>
+        <button
+          onClick={() => onDecide("__DEFERRED__")}
+          className="w-full rounded-md border border-dashed border-border px-4 py-2.5 text-xs text-muted-foreground hover:bg-secondary/50 transition-colors mt-1"
+        >
+          Not ready to decide yet — defer to Final Decisions
+        </button>
       </div>
     </div>
   );

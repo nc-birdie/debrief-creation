@@ -3,7 +3,7 @@
 import { cn } from "@/lib/utils";
 import type { StepDefinition } from "@/lib/steps/definitions";
 import type { StepState } from "@/lib/types";
-import { Check, Loader2 } from "lucide-react";
+import { Check, Loader2, Scale } from "lucide-react";
 
 interface StepRailProps {
   stepDefs: StepDefinition[];
@@ -87,6 +87,24 @@ export function StepRail({
               </button>
             );
           })}
+
+          {/* Final Decisions — always last */}
+          <div className="mt-3 pt-3 border-t border-border">
+            <button
+              onClick={() => onSelectStep(-1)}
+              className={cn(
+                "w-full flex items-start gap-2.5 rounded-md px-2 py-2 text-left transition-colors",
+                activeStep === -1
+                  ? "bg-accent text-accent-foreground"
+                  : "hover:bg-secondary/60 text-foreground"
+              )}
+            >
+              <div className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-primary/20">
+                <Scale className="h-3 w-3 text-primary" />
+              </div>
+              <div className="text-xs font-medium">Final Decisions</div>
+            </button>
+          </div>
         </div>
       </div>
     </nav>

@@ -10,6 +10,9 @@ import {
   AlertTriangle,
   XCircle,
   RefreshCw,
+  Pencil,
+  Check,
+  X,
 } from "lucide-react";
 import type { BriefAssessment, CoverageStatus, CategoryAssessment } from "@/lib/types";
 import { cn } from "@/lib/utils";
@@ -62,6 +65,10 @@ export function BriefAssessmentPanel({
   const [collapsedCategories, setCollapsedCategories] = useState<Set<string>>(
     new Set()
   );
+  const [editingQuestion, setEditingQuestion] = useState<string | null>(null);
+  const [editEvidence, setEditEvidence] = useState("");
+  const [editStatus, setEditStatus] = useState<CoverageStatus>("partial");
+  const [savingEdit, setSavingEdit] = useState(false);
 
   async function runAssessment() {
     setRunning(true);
@@ -81,6 +88,33 @@ export function BriefAssessmentPanel({
       else next.add(catId);
       return next;
     });
+  }
+
+  async function saveQuestionEdit(categoryId: string, questionId: string) {
+    setSavingEdit(true);
+    try {
+      await fetch(`/api/campaigns/${campaignId}/assess`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          categoryId,
+          questionId,
+          evidence: editEvidence,
+          status: editStatus,
+        }),
+      });
+      setEditingQuestion(null);
+      onRefresh();
+    } catch (err) {
+      console.error(err);
+    }
+    setSavingEdit(false);
+  }
+
+  function startEditing(questionId: string, currentEvidence: string, currentStatus: CoverageStatus) {
+    setEditingQuestion(questionId);
+    setEditEvidence(currentEvidence);
+    setEditStatus(currentStatus);
   }
 
   function expandAll() {
@@ -330,28 +364,88 @@ export function BriefAssessmentPanel({
                           qa.questionId;
                         const cfg = STATUS_CONFIG[qa.status];
                         const Icon = cfg.icon;
+                        const isEditing = editingQuestion === qa.questionId;
 
                         return (
                           <div
                             key={qa.questionId}
                             className={cn("px-4 py-3", cfg.bg)}
                           >
-                            <div className="flex items-start gap-2.5">
-                              <Icon
-                                className={cn(
-                                  "h-3.5 w-3.5 shrink-0 mt-0.5",
-                                  cfg.color
-                                )}
-                              />
-                              <div className="min-w-0 space-y-1">
+                            {isEditing ? (
+                              <div className="space-y-2.5">
                                 <p className="text-xs font-medium leading-snug">
                                   {questionText}
                                 </p>
-                                <p className="text-[11px] text-muted-foreground leading-relaxed">
-                                  {qa.evidence}
-                                </p>
+                                <div className="flex gap-1.5">
+                                  {(["covered", "partial", "gap"] as const).map((s) => {
+                                    const sCfg = STATUS_CONFIG[s];
+                                    return (
+                                      <button
+                                        key={s}
+                                        onClick={() => setEditStatus(s)}
+                                        className={cn(
+                                          "flex items-center gap-1 rounded-md border px-2 py-1 text-[10px] font-medium transition-colors",
+                                          editStatus === s
+                                            ? `${sCfg.bg} ${sCfg.color} border-current`
+                                            : "border-border text-muted-foreground hover:bg-secondary"
+                                        )}
+                                      >
+                                        {sCfg.label}
+                                      </button>
+                                    );
+                                  })}
+                                </div>
+                                <textarea
+                                  value={editEvidence}
+                                  onChange={(e) => setEditEvidence(e.target.value)}
+                                  rows={3}
+                                  className="w-full rounded-md border border-border bg-background px-2.5 py-2 text-xs focus:outline-none focus:ring-1 focus:ring-ring resize-y"
+                                  placeholder="Enter your answer or evidence..."
+                                  autoFocus
+                                />
+                                <div className="flex gap-1.5">
+                                  <button
+                                    onClick={() => saveQuestionEdit(catAssessment.categoryId, qa.questionId)}
+                                    disabled={savingEdit}
+                                    className="flex items-center gap-1 rounded-md gradient-bg px-2.5 py-1 text-[10px] font-medium text-white hover:opacity-90 disabled:opacity-50"
+                                  >
+                                    {savingEdit ? <Loader2 className="h-2.5 w-2.5 animate-spin" /> : <Check className="h-2.5 w-2.5" />}
+                                    Save
+                                  </button>
+                                  <button
+                                    onClick={() => setEditingQuestion(null)}
+                                    className="flex items-center gap-1 rounded-md border border-border px-2.5 py-1 text-[10px] hover:bg-secondary"
+                                  >
+                                    <X className="h-2.5 w-2.5" />
+                                    Cancel
+                                  </button>
+                                </div>
                               </div>
-                            </div>
+                            ) : (
+                              <div className="flex items-start gap-2.5 group">
+                                <Icon
+                                  className={cn(
+                                    "h-3.5 w-3.5 shrink-0 mt-0.5",
+                                    cfg.color
+                                  )}
+                                />
+                                <div className="flex-1 min-w-0 space-y-1">
+                                  <p className="text-xs font-medium leading-snug">
+                                    {questionText}
+                                  </p>
+                                  <p className="text-[11px] text-muted-foreground leading-relaxed">
+                                    {qa.evidence}
+                                  </p>
+                                </div>
+                                <button
+                                  onClick={() => startEditing(qa.questionId, qa.evidence, qa.status)}
+                                  className="shrink-0 p-1 rounded opacity-0 group-hover:opacity-100 hover:bg-secondary text-muted-foreground transition-all"
+                                  title="Edit answer"
+                                >
+                                  <Pencil className="h-3 w-3" />
+                                </button>
+                              </div>
+                            )}
                           </div>
                         );
                       })}

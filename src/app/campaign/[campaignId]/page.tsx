@@ -2,12 +2,13 @@
 
 import { useEffect, useState, useCallback, use } from "react";
 import Link from "next/link";
-import { ArrowLeft, Compass } from "lucide-react";
+import { ArrowLeft, Compass, Download } from "lucide-react";
 import type { Campaign, StepState, KnowledgeEntry } from "@/lib/types";
 import type { StepDefinition } from "@/lib/steps/definitions";
 import { StepRail } from "@/components/campaign/step-rail";
 import { StepWorkspace } from "@/components/campaign/step-workspace";
 import { ContextSidebar } from "@/components/campaign/context-sidebar";
+import { FinalDecisions } from "@/components/campaign/final-decisions";
 
 export default function CampaignWorkspacePage({
   params,
@@ -124,6 +125,14 @@ export default function CampaignWorkspacePage({
             Step {activeStep} / {enabledStepDefs.length}
           </span>
           <div className="flex-1" />
+          <a
+            href={`/api/campaigns/${campaignId}/export`}
+            download
+            className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground px-2 py-1 rounded hover:bg-secondary"
+          >
+            <Download className="h-3 w-3" />
+            Export All
+          </a>
           <button
             onClick={() => setSidebarOpen(!sidebarOpen)}
             className="text-xs text-muted-foreground hover:text-foreground px-2 py-1 rounded hover:bg-secondary"
@@ -145,7 +154,14 @@ export default function CampaignWorkspacePage({
 
         {/* Step Workspace */}
         <div className="flex-1 overflow-y-auto">
-          {currentStepDef && currentStepState && (
+          {activeStep === -1 ? (
+            <FinalDecisions
+              campaignId={campaignId}
+              steps={steps}
+              stepDefs={enabledStepDefs}
+              onRefresh={fetchCampaign}
+            />
+          ) : currentStepDef && currentStepState ? (
             <StepWorkspace
               campaignId={campaignId}
               stepDef={currentStepDef}
@@ -156,7 +172,7 @@ export default function CampaignWorkspacePage({
                 fetchCampaign();
               }}
             />
-          )}
+          ) : null}
         </div>
 
         {/* Context Sidebar */}

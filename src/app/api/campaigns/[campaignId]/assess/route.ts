@@ -31,7 +31,7 @@ function templateForPrompt(categories: DbCategory[]): string {
       const qs = cat.questions
         .map((q) => `  - [${q.id}] ${q.question}`)
         .join("\n");
-      return `### ${cat.label}\n${qs}`;
+      return `### [${cat.id}] ${cat.label}\n${qs}`;
     })
     .join("\n\n");
 }
@@ -55,10 +55,10 @@ Return JSON with this exact structure:
 {
   "categories": [
     {
-      "categoryId": "objectives_kpis",
+      "categoryId": "the_id_in_brackets_before_the_category_name",
       "questions": [
         {
-          "questionId": "obj-1",
+          "questionId": "the_id_in_brackets_before_each_question",
           "status": "covered|partial|gap",
           "evidence": "Brief explanation of what we know (if covered/partial) or what's missing (if gap)",
           "entryIds": []
@@ -70,6 +70,7 @@ Return JSON with this exact structure:
   "summary": "2-3 sentence summary of overall readiness, highlighting critical gaps"
 }
 
+CRITICAL: Use the EXACT IDs shown in [brackets] before each category and question. Do NOT invent your own IDs or slugs.
 The overallScore is a percentage (0-100) of questions that are "covered".
 Include EVERY question from EVERY category — do not skip any.`;
 
@@ -153,7 +154,8 @@ export async function POST(
     }
 
     assessment = parseAssessment(agentResult);
-  } catch {
+  } catch (err) {
+    console.error("Assessment AI call failed:", err);
     // Fallback: generate a basic gap-heavy assessment
     assessment = generateFallbackAssessment(template, knowledgeEntries);
   }
@@ -161,6 +163,88 @@ export async function POST(
   assessment.assessedAt = new Date().toISOString();
 
   // Save to campaign
+  await prisma.campaign.update({
+    where: { id: campaignId },
+    data: { briefAssessment: JSON.stringify(assessment) },
+  });
+
+  return NextResponse.json(assessment);
+}
+
+/**
+ * PATCH — update a single question's evidence/status in the assessment.
+ * Body: { categoryId, questionId, evidence, status? }
+ */
+export async function PATCH(
+  req: Request,
+  { params }: { params: Promise<{ campaignId: string }> }
+) {
+  const { campaignId } = await params;
+  const body = await req.json();
+  const { categoryId, questionId, evidence, status } = body;
+
+  if (!categoryId || !questionId || typeof evidence !== "string") {
+    return NextResponse.json(
+      { error: "categoryId, questionId, and evidence are required" },
+      { status: 400 }
+    );
+  }
+
+  const campaign = await prisma.campaign.findUnique({
+    where: { id: campaignId },
+    select: { briefAssessment: true },
+  });
+
+  if (!campaign?.briefAssessment) {
+    return NextResponse.json({ error: "No assessment found" }, { status: 404 });
+  }
+
+  const assessment: BriefAssessment = JSON.parse(campaign.briefAssessment);
+
+  // Find the category — try by ID first, then by index position
+  let catAssessment = assessment.categories.find(
+    (c) => c.categoryId === categoryId
+  );
+  if (!catAssessment) {
+    // Fall back to index-based matching
+    const catIndex = parseInt(categoryId, 10);
+    if (!isNaN(catIndex) && catIndex >= 0 && catIndex < assessment.categories.length) {
+      catAssessment = assessment.categories[catIndex];
+    }
+  }
+
+  if (!catAssessment) {
+    return NextResponse.json({ error: "Category not found" }, { status: 404 });
+  }
+
+  const question = catAssessment.questions.find(
+    (q) => q.questionId === questionId
+  );
+
+  if (!question) {
+    return NextResponse.json({ error: "Question not found" }, { status: 404 });
+  }
+
+  // Update the question
+  question.evidence = evidence;
+  if (status && ["covered", "partial", "gap"].includes(status)) {
+    question.status = status as "covered" | "partial" | "gap";
+  } else if (evidence.trim().length > 0 && question.status === "gap") {
+    // Auto-upgrade from gap to partial when user provides an answer
+    question.status = "partial";
+  }
+
+  // Recalculate overall score
+  let total = 0;
+  let covered = 0;
+  for (const cat of assessment.categories) {
+    for (const q of cat.questions) {
+      total++;
+      if (q.status === "covered") covered++;
+    }
+  }
+  assessment.overallScore = total > 0 ? Math.round((covered / total) * 100) : 0;
+
   await prisma.campaign.update({
     where: { id: campaignId },
     data: { briefAssessment: JSON.stringify(assessment) },

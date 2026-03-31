@@ -5,7 +5,6 @@ import Link from "next/link";
 import {
   ArrowLeft,
   Settings,
-  Bot,
   Save,
   Plus,
   Trash2,
@@ -17,16 +16,20 @@ import {
   ChevronUp,
   ToggleLeft,
   ToggleRight,
+  Search,
 } from "lucide-react";
 import type { StepDefinition } from "@/lib/steps/definitions";
 import { cn } from "@/lib/utils";
 
-interface SubAgentData {
+interface ResearchAgentData {
   id: string;
+  categoryId: string;
+  category: { id: string; label: string; sortOrder: number; enabled: boolean };
   name: string;
-  description: string;
-  systemPrompt: string;
-  outputFormat: string;
+  instructions: string;
+  allowedTools: string[];
+  maxTurns: number;
+  enabled: boolean;
 }
 
 interface BriefingQuestionData {
@@ -60,12 +63,12 @@ const DISPLAY_TYPES = [
 ];
 
 export default function AdminPage() {
-  const [activeTab, setActiveTab] = useState<"steps" | "agents" | "briefing">("steps");
+  const [activeTab, setActiveTab] = useState<"steps" | "research" | "briefing">("steps");
   const [stepDefs, setStepDefs] = useState<StepDefinition[]>([]);
   const [activeStepId, setActiveStepId] = useState<string | null>(null);
-  const [agents, setAgents] = useState<SubAgentData[]>([]);
-  const [editingAgent, setEditingAgent] = useState<SubAgentData | null>(null);
   const [briefingCategories, setBriefingCategories] = useState<BriefingCategoryData[]>([]);
+  const [researchAgents, setResearchAgents] = useState<ResearchAgentData[]>([]);
+  const [activeResearchAgentId, setActiveResearchAgentId] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [addingStep, setAddingStep] = useState(false);
 
@@ -78,21 +81,25 @@ export default function AdminPage() {
     }
   }, [activeStepId]);
 
-  const fetchAgents = useCallback(async () => {
-    const res = await fetch("/api/admin/sub-agents");
-    if (res.ok) setAgents(await res.json());
-  }, []);
-
   const fetchBriefing = useCallback(async () => {
     const res = await fetch("/api/admin/briefing-template");
     if (res.ok) setBriefingCategories(await res.json());
   }, []);
 
+  const fetchResearchAgents = useCallback(async () => {
+    const res = await fetch("/api/admin/research-agents");
+    if (res.ok) {
+      const data: ResearchAgentData[] = await res.json();
+      setResearchAgents(data);
+      if (!activeResearchAgentId && data.length > 0) setActiveResearchAgentId(data[0].id);
+    }
+  }, [activeResearchAgentId]);
+
   useEffect(() => {
     fetchSteps();
-    fetchAgents();
     fetchBriefing();
-  }, [fetchSteps, fetchAgents, fetchBriefing]);
+    fetchResearchAgents();
+  }, [fetchSteps, fetchBriefing, fetchResearchAgents]);
 
   const activeStepDef = stepDefs.find((s) => s.id === activeStepId) ?? null;
 
@@ -125,11 +132,11 @@ export default function AdminPage() {
     await fetchSteps();
   }
 
-  async function addStep(title: string, shortTitle: string) {
+  async function addStep(title: string, shortTitle: string, insertAt?: number) {
     const res = await fetch("/api/admin/steps", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ title, shortTitle }),
+      body: JSON.stringify({ title, shortTitle, insertAt }),
     });
     if (res.ok) {
       const step = await res.json();
@@ -139,6 +146,15 @@ export default function AdminPage() {
     }
   }
 
+  async function moveStep(stepId: string, newNumber: number) {
+    await fetch("/api/admin/steps/reorder", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ stepId, newNumber }),
+    });
+    await fetchSteps();
+  }
+
   async function toggleStep(id: string, enabled: boolean) {
     await fetch(`/api/admin/steps/${id}`, {
       method: "PATCH",
@@ -146,30 +162,6 @@ export default function AdminPage() {
       body: JSON.stringify({ enabled }),
     });
     await fetchSteps();
-  }
-
-  async function saveAgent(agent: SubAgentData) {
-    if (agent.id) {
-      await fetch(`/api/admin/sub-agents/${agent.id}`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(agent),
-      });
-    } else {
-      await fetch("/api/admin/sub-agents", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(agent),
-      });
-    }
-    setEditingAgent(null);
-    fetchAgents();
-  }
-
-  async function deleteAgent(id: string) {
-    if (!confirm("Delete this agent?")) return;
-    await fetch(`/api/admin/sub-agents/${id}`, { method: "DELETE" });
-    fetchAgents();
   }
 
   return (
@@ -190,7 +182,7 @@ export default function AdminPage() {
         <nav className="w-64 shrink-0 border-r border-border bg-sidebar overflow-y-auto">
           <div className="p-3 space-y-4">
             <div className="flex rounded-md border border-border overflow-hidden">
-              {(["steps", "agents", "briefing"] as const).map((tab) => (
+              {(["steps", "research", "briefing"] as const).map((tab) => (
                 <button
                   key={tab}
                   onClick={() => setActiveTab(tab)}
@@ -206,8 +198,26 @@ export default function AdminPage() {
 
             {activeTab === "steps" ? (
               <div className="space-y-1">
-                {stepDefs.map((def) => (
-                  <div key={def.id} className="flex items-center gap-1">
+                {stepDefs.map((def, idx) => (
+                  <div key={def.id} className="flex items-center gap-0.5">
+                    <div className="flex flex-col shrink-0">
+                      <button
+                        onClick={() => moveStep(def.id, def.number - 1)}
+                        disabled={idx === 0}
+                        className="p-0 text-muted-foreground hover:text-foreground disabled:opacity-20"
+                        title="Move up"
+                      >
+                        <ChevronUp className="h-3 w-3" />
+                      </button>
+                      <button
+                        onClick={() => moveStep(def.id, def.number + 1)}
+                        disabled={idx === stepDefs.length - 1}
+                        className="p-0 text-muted-foreground hover:text-foreground disabled:opacity-20"
+                        title="Move down"
+                      >
+                        <ChevronDown className="h-3 w-3" />
+                      </button>
+                    </div>
                     <button
                       onClick={() => setActiveStepId(def.id)}
                       className={cn(
@@ -240,26 +250,40 @@ export default function AdminPage() {
                   Add Step
                 </button>
               </div>
-            ) : activeTab === "agents" ? (
-              <div className="space-y-2">
-                <button
-                  onClick={() => setEditingAgent({ id: "", name: "", description: "", systemPrompt: "", outputFormat: "" })}
-                  className="w-full flex items-center gap-1.5 rounded-md border border-dashed border-border px-2 py-1.5 text-xs text-muted-foreground hover:bg-secondary"
-                >
-                  <Plus className="h-3 w-3" /> Create Agent
-                </button>
-                {agents.map((agent) => (
-                  <button
-                    key={agent.id}
-                    onClick={() => setEditingAgent(agent)}
-                    className={cn(
-                      "w-full flex items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs",
-                      editingAgent?.id === agent.id ? "bg-accent text-accent-foreground" : "hover:bg-secondary/60"
-                    )}
-                  >
-                    <Bot className="h-3 w-3 text-primary" />
-                    <span className="truncate">{agent.name}</span>
-                  </button>
+            ) : activeTab === "research" ? (
+              <div className="space-y-1">
+                {researchAgents.map((ra) => (
+                  <div key={ra.id} className="flex items-center gap-1">
+                    <button
+                      onClick={() => setActiveResearchAgentId(ra.id)}
+                      className={cn(
+                        "flex-1 flex items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs min-w-0",
+                        activeResearchAgentId === ra.id ? "bg-accent text-accent-foreground" : "hover:bg-secondary/60",
+                        !ra.enabled && "opacity-50"
+                      )}
+                    >
+                      <Search className="h-3 w-3 text-primary shrink-0" />
+                      <span className={cn("truncate", !ra.enabled && "line-through")}>{ra.name}</span>
+                    </button>
+                    <button
+                      onClick={async () => {
+                        await fetch(`/api/admin/research-agents/${ra.id}`, {
+                          method: "PATCH",
+                          headers: { "Content-Type": "application/json" },
+                          body: JSON.stringify({ enabled: !ra.enabled }),
+                        });
+                        fetchResearchAgents();
+                      }}
+                      className="p-0.5 shrink-0"
+                      title={ra.enabled ? "Disable" : "Enable"}
+                    >
+                      {ra.enabled ? (
+                        <ToggleRight className="h-3.5 w-3.5 text-green-600" />
+                      ) : (
+                        <ToggleLeft className="h-3.5 w-3.5 text-muted-foreground" />
+                      )}
+                    </button>
+                  </div>
                 ))}
               </div>
             ) : (
@@ -271,7 +295,7 @@ export default function AdminPage() {
         {/* Right editor */}
         <main className="flex-1 overflow-y-auto p-6">
           {activeTab === "steps" && addingStep ? (
-            <AddStepForm onAdd={addStep} onCancel={() => setAddingStep(false)} />
+            <AddStepForm onAdd={addStep} onCancel={() => setAddingStep(false)} totalSteps={stepDefs.length} />
           ) : activeTab === "steps" && editForm ? (
             <StepEditor
               form={editForm}
@@ -283,15 +307,23 @@ export default function AdminPage() {
             />
           ) : activeTab === "steps" ? (
             <div className="text-center py-20 text-muted-foreground text-sm">Select a step or add a new one.</div>
-          ) : activeTab === "agents" && editingAgent ? (
-            <AgentEditor
-              agent={editingAgent}
-              onSave={saveAgent}
-              onDelete={editingAgent.id ? () => deleteAgent(editingAgent.id) : undefined}
-              onCancel={() => setEditingAgent(null)}
+          ) : activeTab === "research" && activeResearchAgentId ? (
+            <ResearchAgentEditor
+              agent={researchAgents.find((a) => a.id === activeResearchAgentId)!}
+              onSave={async (updated) => {
+                setSaving(true);
+                await fetch(`/api/admin/research-agents/${updated.id}`, {
+                  method: "PATCH",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify(updated),
+                });
+                await fetchResearchAgents();
+                setSaving(false);
+              }}
+              saving={saving}
             />
-          ) : activeTab === "agents" ? (
-            <div className="text-center py-20 text-muted-foreground text-sm">Select an agent or create a new one.</div>
+          ) : activeTab === "research" ? (
+            <div className="text-center py-20 text-muted-foreground text-sm">Select a research agent to configure.</div>
           ) : activeTab === "briefing" ? (
             <BriefingTemplateEditor categories={briefingCategories} onRefresh={fetchBriefing} />
           ) : null}
@@ -490,9 +522,10 @@ function StepEditor({
 
 // ── Add Step Form ──
 
-function AddStepForm({ onAdd, onCancel }: { onAdd: (title: string, shortTitle: string) => void; onCancel: () => void }) {
+function AddStepForm({ onAdd, onCancel, totalSteps }: { onAdd: (title: string, shortTitle: string, insertAt?: number) => void; onCancel: () => void; totalSteps: number }) {
   const [title, setTitle] = useState("");
   const [shortTitle, setShortTitle] = useState("");
+  const [position, setPosition] = useState(totalSteps + 1);
 
   return (
     <div className="max-w-lg space-y-4">
@@ -518,55 +551,31 @@ function AddStepForm({ onAdd, onCancel }: { onAdd: (title: string, shortTitle: s
           className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
         />
       </div>
+      <div>
+        <label className="block text-sm font-medium mb-1">Position</label>
+        <p className="text-xs text-muted-foreground mb-2">
+          Insert at this step number. Existing steps at and after this position will shift down.
+        </p>
+        <select
+          value={position}
+          onChange={(e) => setPosition(parseInt(e.target.value, 10))}
+          className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+        >
+          {Array.from({ length: totalSteps + 1 }, (_, i) => i + 1).map((n) => (
+            <option key={n} value={n}>
+              Step {n} {n === totalSteps + 1 ? "(end)" : ""}
+            </option>
+          ))}
+        </select>
+      </div>
       <div className="flex gap-2">
         <button
-          onClick={() => { if (title.trim() && shortTitle.trim()) onAdd(title.trim(), shortTitle.trim()); }}
+          onClick={() => { if (title.trim() && shortTitle.trim()) onAdd(title.trim(), shortTitle.trim(), position); }}
           disabled={!title.trim() || !shortTitle.trim()}
           className="rounded-md gradient-bg px-4 py-2 text-sm font-medium text-white hover:opacity-90 disabled:opacity-50"
         >
           Add Step
         </button>
-        <button onClick={onCancel} className="rounded-md border border-border px-4 py-2 text-sm hover:bg-secondary">Cancel</button>
-      </div>
-    </div>
-  );
-}
-
-// ── Agent Editor (unchanged) ──
-
-function AgentEditor({
-  agent, onSave, onDelete, onCancel,
-}: {
-  agent: SubAgentData;
-  onSave: (agent: SubAgentData) => void;
-  onDelete?: () => void;
-  onCancel: () => void;
-}) {
-  const [form, setForm] = useState(agent);
-  return (
-    <div className="max-w-2xl space-y-6">
-      <div className="flex items-center justify-between">
-        <h2 className="text-lg font-bold">{agent.id ? "Edit Agent" : "Create Agent"}</h2>
-        {onDelete && <button onClick={onDelete} className="flex items-center gap-1 text-xs text-destructive hover:underline"><Trash2 className="h-3 w-3" /> Delete</button>}
-      </div>
-      <div>
-        <label className="block text-sm font-medium mb-1">Name</label>
-        <input type="text" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring" placeholder="e.g. Market Research Agent" />
-      </div>
-      <div>
-        <label className="block text-sm font-medium mb-1">Description</label>
-        <input type="text" value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring" />
-      </div>
-      <div>
-        <label className="block text-sm font-medium mb-1">System Prompt</label>
-        <textarea value={form.systemPrompt} onChange={(e) => setForm({ ...form, systemPrompt: e.target.value })} rows={8} className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring resize-y font-mono" />
-      </div>
-      <div>
-        <label className="block text-sm font-medium mb-1">Output Format</label>
-        <textarea value={form.outputFormat} onChange={(e) => setForm({ ...form, outputFormat: e.target.value })} rows={3} className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring resize-y font-mono" />
-      </div>
-      <div className="flex gap-2">
-        <button onClick={() => onSave(form)} className="flex items-center gap-1.5 rounded-md gradient-bg px-4 py-2 text-sm font-medium text-white hover:opacity-90"><Save className="h-3.5 w-3.5" /> Save</button>
         <button onClick={onCancel} className="rounded-md border border-border px-4 py-2 text-sm hover:bg-secondary">Cancel</button>
       </div>
     </div>
@@ -695,6 +704,121 @@ function BriefingTemplateEditor({ categories, onRefresh }: { categories: Briefin
           <Plus className="h-4 w-4" /> Add Category
         </button>
       )}
+    </div>
+  );
+}
+
+// ── Research Agent Editor ──
+
+const RESEARCH_TOOLS = ["WebSearch", "WebFetch", "Read", "Glob", "Grep"];
+
+function ResearchAgentEditor({
+  agent,
+  onSave,
+  saving,
+}: {
+  agent: ResearchAgentData;
+  onSave: (updated: Partial<ResearchAgentData> & { id: string }) => void;
+  saving: boolean;
+}) {
+  const [form, setForm] = useState(agent);
+
+  // Reset form when agent changes
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => { setForm(agent); }, [agent.id]);
+
+  return (
+    <div className="max-w-2xl space-y-6">
+      <div>
+        <div className="flex items-center gap-2 mb-1">
+          <Search className="h-5 w-5 text-primary" />
+          <h2 className="text-lg font-bold">{form.name}</h2>
+        </div>
+        <p className="text-sm text-muted-foreground">
+          Assessment area: <span className="font-medium text-foreground">{form.category.label}</span>
+        </p>
+      </div>
+
+      <div>
+        <label className="block text-sm font-medium mb-1">Agent Name</label>
+        <input
+          type="text"
+          value={form.name}
+          onChange={(e) => setForm({ ...form, name: e.target.value })}
+          className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+        />
+      </div>
+
+      <div>
+        <label className="block text-sm font-medium mb-1">Research Instructions</label>
+        <p className="text-xs text-muted-foreground mb-2">
+          System prompt that guides the AI when researching this area. Be specific about what to look for, what sources to prioritize, and how to structure findings.
+        </p>
+        <textarea
+          value={form.instructions}
+          onChange={(e) => setForm({ ...form, instructions: e.target.value })}
+          rows={16}
+          className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring resize-y font-mono"
+        />
+      </div>
+
+      <div>
+        <label className="block text-sm font-medium mb-1">Allowed Tools</label>
+        <div className="flex flex-wrap gap-2">
+          {RESEARCH_TOOLS.map((tool) => {
+            const checked = form.allowedTools.includes(tool);
+            return (
+              <label
+                key={tool}
+                className={cn(
+                  "flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-xs cursor-pointer",
+                  checked ? "border-primary/40 bg-primary/10 text-primary" : "border-border hover:bg-secondary"
+                )}
+              >
+                <input
+                  type="checkbox"
+                  checked={checked}
+                  onChange={(e) => {
+                    const next = e.target.checked
+                      ? [...form.allowedTools, tool]
+                      : form.allowedTools.filter((t) => t !== tool);
+                    setForm({ ...form, allowedTools: next });
+                  }}
+                  className="sr-only"
+                />
+                {tool}
+              </label>
+            );
+          })}
+        </div>
+      </div>
+
+      <div>
+        <label className="block text-sm font-medium mb-1">Max Turns</label>
+        <input
+          type="number"
+          value={form.maxTurns}
+          onChange={(e) => setForm({ ...form, maxTurns: parseInt(e.target.value, 10) || 10 })}
+          min={1}
+          max={50}
+          className="w-24 rounded-md border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+        />
+      </div>
+
+      <button
+        onClick={() => onSave({
+          id: form.id,
+          name: form.name,
+          instructions: form.instructions,
+          allowedTools: form.allowedTools,
+          maxTurns: form.maxTurns,
+        })}
+        disabled={saving}
+        className="flex items-center gap-1.5 rounded-md gradient-bg px-4 py-2 text-sm font-medium text-white hover:opacity-90 disabled:opacity-50"
+      >
+        <Save className="h-3.5 w-3.5" />
+        {saving ? "Saving..." : "Save"}
+      </button>
     </div>
   );
 }
