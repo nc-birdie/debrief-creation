@@ -874,8 +874,8 @@ function RenderBlock({ block }: { block: Block }) {
                   </div>
                   {seg.message && <p className="text-xs italic text-muted-foreground mb-3">&ldquo;{seg.message}&rdquo;</p>}
                   <div className="flex flex-wrap gap-x-5 gap-y-1">
-                    {Object.entries(seg.metrics).map(([k, v]) => (
-                      <span key={k} className="text-[11px] text-muted-foreground">{k}: <strong className="text-foreground">{v}</strong></span>
+                    {toKVPairs(seg.metrics).map(([k, v], mi) => (
+                      <span key={mi} className="text-[11px] text-muted-foreground">{k}: <strong className="text-foreground">{v}</strong></span>
                     ))}
                   </div>
                 </div>
@@ -1081,8 +1081,8 @@ function ComparisonRenderer({ block }: { block: ComparisonBlock }) {
             </button>
             {openIdx === i && (
               <div className="px-4 pb-4 pl-10 grid md:grid-cols-2 gap-4">
-                {Object.entries(comp.fields).map(([label, content]) => (
-                  <div key={label}>
+                {toKVPairs(comp.fields).map(([label, content], fi) => (
+                  <div key={fi}>
                     <p className={cn("text-[10px] font-bold uppercase tracking-wide mb-1.5", fieldColors[label] ?? "text-muted-foreground")}>{label}</p>
                     <p className="text-xs text-muted-foreground leading-relaxed">{content}</p>
                   </div>
@@ -1097,6 +1097,27 @@ function ComparisonRenderer({ block }: { block: ComparisonBlock }) {
 }
 
 /* ── Helpers ─────────────────────────────────────────────────────────── */
+
+/** Normalize metrics/fields that may come as Record<string,string>, array of {label,value/content}, or array of {key:value} */
+function toKVPairs(data: unknown): [string, string][] {
+  if (!data) return [];
+  if (Array.isArray(data)) {
+    return data.map((item) => {
+      if (typeof item === "string") return ["", item] as [string, string];
+      if (item.label && (item.value !== undefined || item.content !== undefined))
+        return [item.label, String(item.value ?? item.content)] as [string, string];
+      // Single-key object like { "Revenue": "$5B+" }
+      const entries = Object.entries(item);
+      if (entries.length === 1) return [String(entries[0][0]), String(entries[0][1])] as [string, string];
+      // Multi-key: flatten
+      return entries.map(([k, v]) => [String(k), String(v)] as [string, string]);
+    }).flat().filter((p): p is [string, string] => Array.isArray(p) && p.length === 2);
+  }
+  if (typeof data === "object") {
+    return Object.entries(data as Record<string, unknown>).map(([k, v]) => [k, typeof v === "object" ? JSON.stringify(v) : String(v)] as [string, string]);
+  }
+  return [];
+}
 
 function blockLabel(block: Block): string {
   switch (block.type) {
