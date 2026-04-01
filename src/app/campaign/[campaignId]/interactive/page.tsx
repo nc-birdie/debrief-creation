@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useRef, useMemo, use } from "react";
+import { useEffect, useId, useState, useRef, useMemo, use } from "react";
 import Link from "next/link";
 import {
   ArrowLeft,
@@ -1151,6 +1151,7 @@ function blockToMarkdown(block: Block): string {
 /* ── Markdown renderer ───────────────────────────────────────────────── */
 
 function Markdown({ content }: { content: string }) {
+  const prefix = useId();
   const lines = content.split("\n");
   const elements: React.ReactNode[] = [];
   let listItems: string[] = [];
@@ -1160,7 +1161,7 @@ function Markdown({ content }: { content: string }) {
     if (listItems.length > 0 && listType) {
       const Tag = listType;
       elements.push(
-        <Tag key={elements.length} className={listType === "ol" ? "list-decimal pl-5 space-y-1" : "list-disc pl-5 space-y-1"}>
+        <Tag key={`${prefix}-l${elements.length}`} className={listType === "ol" ? "list-decimal pl-5 space-y-1" : "list-disc pl-5 space-y-1"}>
           {listItems.map((item, i) => <li key={i}><Inline text={item} /></li>)}
         </Tag>
       );
@@ -1170,35 +1171,37 @@ function Markdown({ content }: { content: string }) {
   }
 
   for (let i = 0; i < lines.length; i++) {
+    const k = `${prefix}-${i}`;
     const line = lines[i];
     const h3 = line.match(/^###\s+(.*)/);
-    if (h3) { flushList(); elements.push(<h3 key={i} className="text-sm font-semibold mt-4 mb-1"><Inline text={h3[1]} /></h3>); continue; }
+    if (h3) { flushList(); elements.push(<h3 key={k} className="text-sm font-semibold mt-4 mb-1"><Inline text={h3[1]} /></h3>); continue; }
     const h2 = line.match(/^##\s+(.*)/);
-    if (h2) { flushList(); elements.push(<h2 key={i} className="text-base font-semibold mt-5 mb-2"><Inline text={h2[1]} /></h2>); continue; }
+    if (h2) { flushList(); elements.push(<h2 key={k} className="text-base font-semibold mt-5 mb-2"><Inline text={h2[1]} /></h2>); continue; }
     const h1 = line.match(/^#\s+(.*)/);
-    if (h1) { flushList(); elements.push(<h1 key={i} className="text-lg font-bold mt-5 mb-2"><Inline text={h1[1]} /></h1>); continue; }
+    if (h1) { flushList(); elements.push(<h1 key={k} className="text-lg font-bold mt-5 mb-2"><Inline text={h1[1]} /></h1>); continue; }
     const ul = line.match(/^[-*]\s+(.*)/);
     if (ul) { if (listType !== "ul") { flushList(); listType = "ul"; } listItems.push(ul[1]); continue; }
     const ol = line.match(/^\d+\.\s+(.*)/);
     if (ol) { if (listType !== "ol") { flushList(); listType = "ol"; } listItems.push(ol[1]); continue; }
     flushList();
     if (line.trim() === "") continue;
-    elements.push(<p key={i} className="mb-2"><Inline text={line} /></p>);
+    elements.push(<p key={k} className="mb-2"><Inline text={line} /></p>);
   }
   flushList();
   return <>{elements}</>;
 }
 
 function Inline({ text }: { text: string }) {
+  const id = useId();
   const parts: React.ReactNode[] = [];
   const regex = /(\*\*(.+?)\*\*)|(\*(.+?)\*)|(`(.+?)`)/g;
   let lastIdx = 0;
   let match;
   while ((match = regex.exec(text)) !== null) {
     if (match.index > lastIdx) parts.push(text.slice(lastIdx, match.index));
-    if (match[2]) parts.push(<strong key={match.index}>{match[2]}</strong>);
-    else if (match[4]) parts.push(<em key={match.index}>{match[4]}</em>);
-    else if (match[6]) parts.push(<code key={match.index} className="rounded bg-secondary px-1 py-0.5 text-[11px]">{match[6]}</code>);
+    if (match[2]) parts.push(<strong key={`${id}-${match.index}`}>{match[2]}</strong>);
+    else if (match[4]) parts.push(<em key={`${id}-${match.index}`}>{match[4]}</em>);
+    else if (match[6]) parts.push(<code key={`${id}-${match.index}`} className="rounded bg-secondary px-1 py-0.5 text-[11px]">{match[6]}</code>);
     lastIdx = match.index + match[0].length;
   }
   if (lastIdx < text.length) parts.push(text.slice(lastIdx));
