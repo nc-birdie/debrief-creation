@@ -2,8 +2,10 @@
 
 import { useEffect, useState, useCallback, useRef, use } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import {
   ArrowLeft,
+  Bird,
   Compass,
   Download,
   Loader2,
@@ -39,6 +41,7 @@ export default function CampaignWorkspacePage({
   params: Promise<{ campaignId: string }>;
 }) {
   const { campaignId } = use(params);
+  const router = useRouter();
   const [campaign, setCampaign] = useState<Campaign | null>(null);
   const [steps, setSteps] = useState<StepState[]>([]);
   const [knowledgeEntries, setKnowledgeEntries] = useState<KnowledgeEntry[]>([]);
@@ -80,10 +83,10 @@ export default function CampaignWorkspacePage({
     fetchStepDefs();
   }, [fetchCampaign, fetchStepDefs]);
 
-  // Auto-trigger generation when all steps are pending
+  // Auto-trigger generation when all steps are pending (or no step states yet)
   useEffect(() => {
-    if (autoTriggered.current || loading || steps.length === 0) return;
-    const allPending = steps.every((s) => s.status === "pending");
+    if (autoTriggered.current || loading || stepDefs.length === 0) return;
+    const allPending = steps.length === 0 || steps.every((s) => s.status === "pending");
     const anyReview = steps.some((s) => s.status === "review" || s.status === "approved");
     if (allPending && !generating) {
       autoTriggered.current = true;
@@ -92,7 +95,7 @@ export default function CampaignWorkspacePage({
       autoTriggered.current = true;
       setGenerationDone(true);
     }
-  }, [steps, loading]);
+  }, [steps, loading, stepDefs]);
 
   // Poll for progress while generating
   useEffect(() => {
@@ -249,13 +252,30 @@ export default function CampaignWorkspacePage({
           >
             Overview
           </button>
+          {generationDone && (
+            <button
+              onClick={() => router.push(`/campaign/${campaignId}/interactive`)}
+              className="flex items-center gap-1.5 text-xs font-medium gradient-bg text-white px-3 py-1.5 rounded hover:opacity-90 transition-opacity"
+            >
+              <Bird className="h-3 w-3" />
+              Interactive Review
+            </button>
+          )}
           <a
             href={`/api/campaigns/${campaignId}/export`}
             download
             className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground px-2 py-1 rounded hover:bg-secondary"
           >
             <Download className="h-3 w-3" />
-            Export
+            Steps
+          </a>
+          <a
+            href={`/api/campaigns/${campaignId}/export?type=context`}
+            download
+            className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground px-2 py-1 rounded hover:bg-secondary"
+          >
+            <Download className="h-3 w-3" />
+            Context
           </a>
           <button
             onClick={() => setSidebarOpen(!sidebarOpen)}

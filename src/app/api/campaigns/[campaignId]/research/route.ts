@@ -2,6 +2,8 @@ import { NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
 import { KNOWLEDGE_AREAS, areasForPrompt } from "@/lib/knowledge-areas";
 import type { BriefAssessment } from "@/lib/types";
+import { RESEARCH_AGENT_SEEDS } from "@/lib/research-agent-seeds";
+import { BRIEFING_FRAMEWORK } from "@/lib/briefing-questions";
 
 const FINDINGS_FORMAT = `Return your findings as JSON with this exact structure:
 {
@@ -62,7 +64,7 @@ export async function POST(
   }
 
   // Load briefing categories with their questions and research agents
-  const categories = await prisma.briefingCategory.findMany({
+  let categories = await prisma.briefingCategory.findMany({
     where: { enabled: true },
     include: {
       questions: { where: { enabled: true } },
@@ -70,6 +72,37 @@ export async function POST(
     },
     orderBy: { sortOrder: "asc" },
   });
+
+  // Auto-seed research agents if none exist
+  const hasAnyAgent = categories.some((c) => c.researchAgent);
+  if (!hasAnyAgent && categories.length > 0) {
+    for (const cat of categories) {
+      const seed = RESEARCH_AGENT_SEEDS.find((s) => {
+        const frameworkCat = BRIEFING_FRAMEWORK.find((f) => f.label === cat.label);
+        return frameworkCat && s.categoryKey === frameworkCat.id;
+      });
+      await prisma.researchAgentDef.create({
+        data: {
+          categoryId: cat.id,
+          name: seed?.name ?? `${cat.label} Researcher`,
+          instructions:
+            seed?.instructions ??
+            `Research specialist for: ${cat.label}.\n\nSearch for current, relevant information about this area and provide structured findings.`,
+          allowedTools: JSON.stringify(["WebSearch", "WebFetch"]),
+          maxTurns: 10,
+        },
+      });
+    }
+    // Reload with agents
+    categories = await prisma.briefingCategory.findMany({
+      where: { enabled: true },
+      include: {
+        questions: { where: { enabled: true } },
+        researchAgent: true,
+      },
+      orderBy: { sortOrder: "asc" },
+    });
+  }
 
   // Build per-category research tasks
   interface ResearchTask {

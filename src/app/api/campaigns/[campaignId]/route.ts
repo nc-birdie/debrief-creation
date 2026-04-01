@@ -45,7 +45,7 @@ export async function PATCH(
 ) {
   const { campaignId } = await params;
   const body = await req.json();
-  const allowed = ["name", "description", "status", "currentStep"];
+  const allowed = ["name", "description", "status", "currentStep", "interactiveDesign"];
   const data: Record<string, unknown> = {};
   for (const key of allowed) {
     if (key in body) data[key] = body[key];

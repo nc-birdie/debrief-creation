@@ -36,11 +36,25 @@ export async function POST(
   });
   const stepDefs = stepDefRows.map(serializeStepDef);
 
-  // Load all step states
-  const stepStates = await prisma.stepState.findMany({
+  // Load all step states — create any missing ones
+  const existingStepStates = await prisma.stepState.findMany({
     where: { campaignId },
     orderBy: { stepNumber: "asc" },
   });
+  const existingNums = new Set(existingStepStates.map((s) => s.stepNumber));
+  const missingDefs = stepDefs.filter((d) => !existingNums.has(d.number));
+  if (missingDefs.length > 0) {
+    await Promise.all(
+      missingDefs.map((d) =>
+        prisma.stepState.create({
+          data: { campaignId, stepNumber: d.number, status: "pending" },
+        })
+      )
+    );
+  }
+  const stepStates = missingDefs.length > 0
+    ? await prisma.stepState.findMany({ where: { campaignId }, orderBy: { stepNumber: "asc" } })
+    : existingStepStates;
 
   // Load program context
   const knowledgeEntries = await prisma.knowledgeEntry.findMany({
@@ -171,6 +185,12 @@ export async function POST(
       }
     })
   );
+
+  // Auto-save exports to data/ for git
+  try {
+    const saveUrl = new URL(`/api/campaigns/${campaignId}/export`, req.url);
+    await fetch(saveUrl.toString(), { method: "POST" });
+  } catch { /* non-fatal */ }
 
   return NextResponse.json({
     completed: results.filter((r) => r.status === "ok").length,
