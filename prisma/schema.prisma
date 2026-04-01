@@ -28,8 +28,9 @@ model Campaign {
   description     String   @default("")
   status          String   @default("setup") // setup | in_progress | completed
   currentStep     Int      @default(1)
-  briefAssessment String?  // JSON: assessment result from AI
-  createdById     String?
+  briefAssessment    String?  // JSON: assessment result from AI
+  interactiveDesign  String?  // JSON: generated immersive page design
+  createdById        String?
   createdBy       User?    @relation(fields: [createdById], references: [id], onDelete: SetNull)
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
