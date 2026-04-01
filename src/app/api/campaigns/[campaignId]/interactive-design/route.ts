@@ -218,43 +218,51 @@ Content to include (ALL of it — do not summarize or omit anything):
 
 ${chapterContent}${extras}
 
-MANDATORY BLOCK TYPE RULES — you MUST follow these:
+CRITICAL: You are building a DASHBOARD, not a document. Think of this like a Notion page or an executive intelligence dashboard — every piece of content should be in a rich, interactive module. Plain text paragraphs are a FAILURE STATE.
 
-1. If content has ranked/scored/prioritized items (pain points, risks, opportunities with scores or severity) → use "scored-list"
-2. If content has expandable technical detail, features, specs, or items with paragraphs of detail → use "accordion"
-3. If content describes market segments, ICPs, personas with attributes like tier/revenue/fit → use "segment-cards"
-4. If content has dated events, milestones, quarterly plans → use "timeline"
-5. If content has categorized groups of features/capabilities → use "tabs" (one tab per category, accordion items inside)
-6. If content has GET/TO/BY statements or campaign directions → use "direction-cards"
-7. If content compares competitors with strengths/weaknesses/advantages → use "comparison"
-8. If content has phases, stages, or sequential periods → use "phases"
-9. If content has key numbers/metrics (2-6) → use "stats"
-10. If content has a strategic insight or pull-quote → use "quote"
+BLOCK TYPE SELECTION — follow this decision tree for EVERY piece of content:
 
-DO NOT default to "prose" for structured content. "prose" should ONLY be used for narrative paragraphs that don't fit any structured type.
-DO NOT use "cards" when "accordion", "tabs", "segment-cards", or "scored-list" would be more appropriate.
-DO NOT include a "chapter" block — that's already added.
+- Lists of items with detail → "accordion" (expandable items, click to reveal detail)
+- Ranked/scored items → "scored-list" (with numeric scores and color-coded severity)
+- Market segments, personas, ICPs → "segment-cards" (with tier badges, metrics, positioning)
+- Dated events, milestones, timelines → "timeline" (grouped by quarter/phase)
+- Categorized features/capabilities → "tabs" (tab per category, accordion items inside each)
+- Campaign directions, GET/TO/BY → "direction-cards" (structured statement cards)
+- Competitor analysis, comparisons → "comparison" (expandable with labeled field grids)
+- Phases, stages, arcs → "phases" (colored phase blocks in a row)
+- Key metrics/KPIs (2-6 numbers) → "stats" (big numbers in a grid)
+- Key insight or important quote → "quote" (pull-quote)
+- Strategic warnings/opportunities → "callout" (highlighted box)
+- Side-by-side contrast → "two-column" (left vs right)
+- Parallel items needing title+description → "cards" (grid)
+- Data with rows and columns → "table"
 
-Aim for 5-12 blocks per chapter. Vary the types — never use the same type twice in a row.
+HARD RULES:
+- Maximum 1 "prose" block per chapter. If you find yourself writing a second prose block, convert it to accordion, cards, list, or another structured type instead.
+- Every chapter MUST use at least 3 different rich block types (accordion, tabs, scored-list, segment-cards, timeline, comparison, direction-cards, or phases).
+- If content has bullet points, it MUST become accordion, list, scored-list, or cards — NEVER prose.
+- DO NOT include a "chapter" block — that's already added.
+- Aim for 5-12 blocks per chapter.
 
 Return ONLY a JSON array of blocks — no markdown fences, no preamble.`;
 
       let chapterBlocksResult = "";
       for await (const message of query({
         prompt: chapterPrompt,
-        options: { systemPrompt, maxTurns: 1 },
+        options: { systemPrompt, maxTurns: 3 },
       })) {
         if ("result" in message) chapterBlocksResult = message.result;
       }
 
       const chapterBlocks = parseJsonArray(chapterBlocksResult);
-      if (chapterBlocks) {
+      if (chapterBlocks && chapterBlocks.length > 0) {
         for (const block of chapterBlocks) {
           if (block.type !== "hero" && block.type !== "chapter") {
             allBlocks.push({ ...block, sourceSteps: chapter.steps });
           }
         }
       } else {
+        console.error(`Chapter ${chapter.number} parse failed. Result length: ${chapterBlocksResult.length}. First 300 chars:`, chapterBlocksResult.slice(0, 300));
         // Fallback: dump content as prose
         allBlocks.push({ type: "prose", content: chapterContent + extras, sourceSteps: chapter.steps });
       }
