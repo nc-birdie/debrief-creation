@@ -161,138 +161,119 @@ ${allContent}
 Return the JSON array of blocks.`;
 
   try {
-    // Content is large (~70K tokens), so we process in chapter batches
-    // First pass: plan the chapters
-    let planResult = "";
-    for await (const message of query({
-      prompt: `Plan the chapter structure for the campaign "${campaign.name}".
-
-Here are the step titles and approximate lengths:
-${stepContents.map((s) => `- Step ${s.stepNumber}: ${s.title} (~${Math.round(s.content.length / 100)} paragraphs)`).join("\n")}
-${allGaps.length > 0 ? `\n${allGaps.length} knowledge gaps across steps` : ""}
-${allDecisions.length > 0 ? `\n${allDecisions.length} decisions across steps` : ""}
-
-Return a JSON array of chapter plans:
-[{ "number": 1, "title": "...", "subtitle": "...", "steps": [1, 2] }, ...]
-
-Include a final chapter for gaps/decisions if they exist. Return ONLY the JSON array.`,
-      options: {
-        systemPrompt: "You are a B2B campaign strategist organizing content into 4-7 narrative chapters. Group related steps together thematically. Return JSON only.",
-        maxTurns: 1,
-      },
-    })) {
-      if ("result" in message) planResult = message.result;
-    }
-
-    const chapterPlan = parseJsonArray(planResult) ?? [{ number: 1, title: campaign.name, steps: stepContents.map((s) => s.stepNumber) }];
-
-    // Second pass: generate blocks for each chapter
     const allBlocks: Record<string, unknown>[] = [];
 
-    // Add hero
+    // Hero block
     allBlocks.push({
       type: "hero",
       title: campaign.name,
-      subtitle: stepContents[0]?.content.split("\n").find((l: string) => l.trim().length > 20)?.trim().slice(0, 120) || "Campaign Direction",
-      abstract: campaign.description || stepContents[0]?.content.slice(0, 250) || "",
-      sourceSteps: [stepContents[0]?.stepNumber ?? 1],
+      subtitle: campaign.description || "Campaign Direction",
+      abstract: "",
+      sourceSteps: [1],
     });
 
-    for (const chapter of chapterPlan) {
-      // Add chapter block
-      allBlocks.push({ type: "chapter", number: chapter.number, title: chapter.title, subtitle: chapter.subtitle || undefined, sourceSteps: chapter.steps });
+    // Process each step individually — reliable, always works
+    let chapterNum = 0;
+    for (const step of stepContents) {
+      chapterNum++;
 
-      // Get content for this chapter's steps
-      const chapterSteps = stepContents.filter((s) => (chapter.steps as number[]).includes(s.stepNumber));
-      const chapterContent = chapterSteps.map((s) => `=== STEP ${s.stepNumber}: ${s.title} ===\n${s.content}`).join("\n\n---\n\n");
+      // Add chapter divider for each step
+      allBlocks.push({
+        type: "chapter",
+        number: chapterNum,
+        title: step.title,
+        subtitle: step.shortTitle,
+        sourceSteps: [step.stepNumber],
+      });
 
-      // Include gaps/decisions for the final chapter
-      const isLastChapter = chapter.number === chapterPlan[chapterPlan.length - 1].number;
-      const extras = isLastChapter ? gapsSection + decisionsSection : "";
+      const stepPrompt = `Convert this campaign strategy content into rich dashboard blocks.
 
-      if (chapterContent.length === 0 && extras.length === 0) continue;
+CONTENT (include ALL details — do not summarize or omit anything):
 
-      const chapterPrompt = `Design the blocks for Chapter ${chapter.number}: "${chapter.title}".
+${step.content}
 
-Content to include (ALL of it — do not summarize or omit anything):
+You are building a DASHBOARD, not a document. Every piece of content must be in a structured, interactive module.
 
-${chapterContent}${extras}
-
-CRITICAL: You are building a DASHBOARD, not a document. Think of this like a Notion page or an executive intelligence dashboard — every piece of content should be in a rich, interactive module. Plain text paragraphs are a FAILURE STATE.
-
-BLOCK TYPE SELECTION — follow this decision tree for EVERY piece of content:
-
-- Lists of items with detail → "accordion" (expandable items, click to reveal detail)
-- Ranked/scored items → "scored-list" (with numeric scores and color-coded severity)
-- Market segments, personas, ICPs → "segment-cards" (with tier badges, metrics, positioning)
+BLOCK TYPE SELECTION — use this decision tree:
+- Lists of items with paragraphs of detail → "accordion" (expandable, click to reveal)
+- Ranked/scored/prioritized items → "scored-list" (numeric scores, color severity)
+- Market segments, personas, ICPs with attributes → "segment-cards" (tier badges, metrics)
 - Dated events, milestones, timelines → "timeline" (grouped by quarter/phase)
-- Categorized features/capabilities → "tabs" (tab per category, accordion items inside each)
-- Campaign directions, GET/TO/BY → "direction-cards" (structured statement cards)
-- Competitor analysis, comparisons → "comparison" (expandable with labeled field grids)
-- Phases, stages, arcs → "phases" (colored phase blocks in a row)
-- Key metrics/KPIs (2-6 numbers) → "stats" (big numbers in a grid)
-- Key insight or important quote → "quote" (pull-quote)
-- Strategic warnings/opportunities → "callout" (highlighted box)
-- Side-by-side contrast → "two-column" (left vs right)
-- Parallel items needing title+description → "cards" (grid)
-- Data with rows and columns → "table"
+- Categorized groups of features → "tabs" (one tab per category, accordion items inside)
+- GET/TO/BY campaign directions → "direction-cards" (structured statement cards)
+- Competitor analysis, comparisons → "comparison" (expandable field grids)
+- Phases, stages, arcs → "phases" (colored blocks in a row)
+- Key metrics (2-6 numbers) → "stats" (big numbers grid)
+- Key insight or pull-quote → "quote"
+- Strategic warnings/opportunities → "callout" (variant: insight|warning|opportunity)
+- Side-by-side contrast → "two-column"
+- Parallel items with title+description → "cards"
+- Tabular data → "table"
+- Only narrative paragraphs with no structure → "prose" (MAX 1 per response)
 
-HARD RULES:
-- Maximum 1 "prose" block per chapter. If you find yourself writing a second prose block, convert it to accordion, cards, list, or another structured type instead.
-- Every chapter MUST use at least 3 different rich block types (accordion, tabs, scored-list, segment-cards, timeline, comparison, direction-cards, or phases).
-- If content has bullet points, it MUST become accordion, list, scored-list, or cards — NEVER prose.
-- DO NOT include a "chapter" block — that's already added.
-- Aim for 5-12 blocks per chapter.
+RULES:
+- Use at least 3 different block types
+- Maximum 1 prose block — convert everything else to structured types
+- Bullet points MUST become accordion, list, scored-list, or cards — never prose
+- Include ALL content — completeness over brevity
 
-Return ONLY a JSON array of blocks — no markdown fences, no preamble.`;
+Return ONLY a JSON array of blocks. No markdown fences, no explanation.`;
 
-      let chapterBlocksResult = "";
+      let result = "";
       for await (const message of query({
-        prompt: chapterPrompt,
+        prompt: stepPrompt,
         options: { systemPrompt, maxTurns: 3 },
       })) {
-        if ("result" in message) chapterBlocksResult = message.result;
+        if ("result" in message) result = message.result;
       }
 
-      const chapterBlocks = parseJsonArray(chapterBlocksResult);
-      if (chapterBlocks && chapterBlocks.length > 0) {
-        for (const block of chapterBlocks) {
+      const blocks = parseJsonArray(result);
+      if (blocks && blocks.length > 0) {
+        for (const block of blocks) {
           if (block.type !== "hero" && block.type !== "chapter") {
-            allBlocks.push({ ...block, sourceSteps: chapter.steps });
+            allBlocks.push({ ...block, sourceSteps: [step.stepNumber] });
+          }
+        }
+        console.log(`Step ${step.stepNumber} (${step.shortTitle}): ${blocks.length} blocks generated`);
+      } else {
+        console.error(`Step ${step.stepNumber} failed (result len=${result.length}). Prose fallback.`);
+        allBlocks.push({ type: "prose", content: step.content, sourceSteps: [step.stepNumber] });
+      }
+    }
+
+    // Add gaps & decisions as final chapter if they exist
+    if (gapsSection || decisionsSection) {
+      chapterNum++;
+      allBlocks.push({
+        type: "chapter",
+        number: chapterNum,
+        title: "Open Questions & Decisions",
+        subtitle: `${allGaps.length} knowledge gaps, ${allDecisions.length} decisions`,
+        sourceSteps: [],
+      });
+
+      const gapsContent = gapsSection + decisionsSection;
+      let gapsResult = "";
+      for await (const message of query({
+        prompt: `Convert these knowledge gaps and decisions into dashboard blocks.
+
+${gapsContent}
+
+Use scored-list for gaps (severity as score). Use accordion or cards for decisions (showing options, recommendation, status). Return ONLY a JSON array.`,
+        options: { systemPrompt, maxTurns: 3 },
+      })) {
+        if ("result" in message) gapsResult = message.result;
+      }
+
+      const gapsBlocks = parseJsonArray(gapsResult);
+      if (gapsBlocks && gapsBlocks.length > 0) {
+        for (const block of gapsBlocks) {
+          if (block.type !== "hero" && block.type !== "chapter") {
+            allBlocks.push({ ...block, sourceSteps: [] });
           }
         }
       } else {
-        console.error(`Chapter ${chapter.number} full parse failed (len=${chapterBlocksResult.length}). Retrying per-step...`);
-        // Retry: process each step in this chapter individually
-        const stepContentsForChapter = [...chapterSteps.map((s) => ({ label: `Step ${s.stepNumber}: ${s.title}`, content: s.content }))];
-        if (extras) stepContentsForChapter.push({ label: "Gaps & Decisions", content: extras });
-
-        for (const stepContent of stepContentsForChapter) {
-          let stepResult = "";
-          for await (const message of query({
-            prompt: `Design blocks for "${stepContent.label}" within Chapter ${chapter.number}.
-
-Content (include ALL of it):
-
-${stepContent.content}
-
-CRITICAL: Return a JSON array of rich blocks. Max 1 prose block. Use accordion, tabs, scored-list, stats, comparison, timeline, segment-cards, direction-cards, phases, cards, table, callout, quote, two-column, list as appropriate. Return ONLY JSON.`,
-            options: { systemPrompt, maxTurns: 3 },
-          })) {
-            if ("result" in message) stepResult = message.result;
-          }
-          const stepBlocks = parseJsonArray(stepResult);
-          if (stepBlocks && stepBlocks.length > 0) {
-            for (const block of stepBlocks) {
-              if (block.type !== "hero" && block.type !== "chapter") {
-                allBlocks.push({ ...block, sourceSteps: chapter.steps });
-              }
-            }
-          } else {
-            console.error(`Step "${stepContent.label}" also failed (len=${stepResult.length}). Using prose fallback.`);
-            allBlocks.push({ type: "prose", content: stepContent.content, sourceSteps: chapter.steps });
-          }
-        }
+        allBlocks.push({ type: "prose", content: gapsContent, sourceSteps: [] });
       }
     }
 
