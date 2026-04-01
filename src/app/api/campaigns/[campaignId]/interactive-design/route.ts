@@ -262,9 +262,37 @@ Return ONLY a JSON array of blocks — no markdown fences, no preamble.`;
           }
         }
       } else {
-        console.error(`Chapter ${chapter.number} parse failed. Result length: ${chapterBlocksResult.length}. First 300 chars:`, chapterBlocksResult.slice(0, 300));
-        // Fallback: dump content as prose
-        allBlocks.push({ type: "prose", content: chapterContent + extras, sourceSteps: chapter.steps });
+        console.error(`Chapter ${chapter.number} full parse failed (len=${chapterBlocksResult.length}). Retrying per-step...`);
+        // Retry: process each step in this chapter individually
+        const stepContentsForChapter = [...chapterSteps.map((s) => ({ label: `Step ${s.stepNumber}: ${s.title}`, content: s.content }))];
+        if (extras) stepContentsForChapter.push({ label: "Gaps & Decisions", content: extras });
+
+        for (const stepContent of stepContentsForChapter) {
+          let stepResult = "";
+          for await (const message of query({
+            prompt: `Design blocks for "${stepContent.label}" within Chapter ${chapter.number}.
+
+Content (include ALL of it):
+
+${stepContent.content}
+
+CRITICAL: Return a JSON array of rich blocks. Max 1 prose block. Use accordion, tabs, scored-list, stats, comparison, timeline, segment-cards, direction-cards, phases, cards, table, callout, quote, two-column, list as appropriate. Return ONLY JSON.`,
+            options: { systemPrompt, maxTurns: 3 },
+          })) {
+            if ("result" in message) stepResult = message.result;
+          }
+          const stepBlocks = parseJsonArray(stepResult);
+          if (stepBlocks && stepBlocks.length > 0) {
+            for (const block of stepBlocks) {
+              if (block.type !== "hero" && block.type !== "chapter") {
+                allBlocks.push({ ...block, sourceSteps: chapter.steps });
+              }
+            }
+          } else {
+            console.error(`Step "${stepContent.label}" also failed (len=${stepResult.length}). Using prose fallback.`);
+            allBlocks.push({ type: "prose", content: stepContent.content, sourceSteps: chapter.steps });
+          }
+        }
       }
     }
 
