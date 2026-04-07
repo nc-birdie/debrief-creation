@@ -15,6 +15,9 @@ export async function GET(
         include: { source: { select: { name: true } } },
         orderBy: [{ area: "asc" }, { createdAt: "asc" }],
       },
+      artefacts: {
+        orderBy: [{ category: "asc" }, { createdAt: "asc" }],
+      },
     },
   });
 

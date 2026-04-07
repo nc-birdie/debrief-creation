@@ -132,6 +132,24 @@ export interface BriefAssessment {
   assessedAt: string;
 }
 
+// Artefacts
+
+export type ArtefactCategory = "research" | "direction_setting";
+export type ArtefactStatus = "draft" | "final";
+
+export interface Artefact {
+  id: string;
+  campaignId: string;
+  category: ArtefactCategory;
+  type: string;
+  name: string;
+  description: string;
+  content: string;
+  status: ArtefactStatus;
+  createdAt: string;
+  updatedAt: string;
+}
+
 // Step mutations
 export type StepMutation =
   | { type: "user-edit"; content: string }

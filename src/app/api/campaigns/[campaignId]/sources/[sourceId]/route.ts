@@ -8,6 +8,8 @@ export async function DELETE(
   }: { params: Promise<{ campaignId: string; sourceId: string }> }
 ) {
   const { sourceId } = await params;
+  // Delete knowledge entries extracted from this source
+  await prisma.knowledgeEntry.deleteMany({ where: { sourceId } });
   await prisma.source.delete({ where: { id: sourceId } });
   return NextResponse.json({ ok: true });
 }
