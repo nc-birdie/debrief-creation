@@ -4,7 +4,7 @@ generator client {
 }
 
 datasource db {
-  provider = "sqlite"
+  provider = "postgresql"
 }
 
 // ── Users ────────────────────────────────────────────────────────────────
@@ -28,8 +28,8 @@ model Campaign {
   description     String   @default("")
   status          String   @default("setup") // setup | in_progress | completed
   currentStep     Int      @default(1)
-  briefAssessment    String?  // JSON: assessment result from AI
-  interactiveDesign  String?  // JSON: generated immersive page design
+  briefAssessment    String?  @db.Text // JSON: assessment result from AI
+  interactiveDesign  String?  @db.Text // JSON: generated immersive page design
   createdById        String?
   createdBy       User?    @relation(fields: [createdById], references: [id], onDelete: SetNull)
   createdAt       DateTime @default(now())
@@ -39,6 +39,7 @@ model Campaign {
   steps            StepState[]
   agentRuns        AgentRun[]
   knowledgeEntries KnowledgeEntry[]
+  artefacts        Artefact[]
 
   @@index([createdById])
 }
@@ -51,7 +52,7 @@ model Source {
   filePath   String
   fileType   String   @default("text") // text | pdf | markdown | notes
   sizeBytes  Int      @default(0)
-  summary    String?
+  summary    String?  @db.Text
   ingested   Boolean  @default(false)
   createdAt  DateTime @default(now())
 
@@ -66,7 +67,7 @@ model KnowledgeEntry {
   campaign   Campaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
   area       String   // e.g. "product_technology", "market_context"
   title      String
-  content    String
+  content    String   @db.Text
   sourceId   String?
   source     Source?  @relation(fields: [sourceId], references: [id], onDelete: SetNull)
   createdAt  DateTime @default(now())
@@ -82,11 +83,11 @@ model StepState {
   campaign      Campaign  @relation(fields: [campaignId], references: [id], onDelete: Cascade)
   stepNumber    Int
   status        String    @default("pending") // pending | generating | review | approved | skipped
-  aiDraft       String?
-  userEdits     String?
-  finalOutput   String?
-  knowledgeGaps String    @default("[]") // JSON array
-  decisions     String    @default("[]") // JSON array
+  aiDraft       String?   @db.Text
+  userEdits     String?   @db.Text
+  finalOutput   String?   @db.Text
+  knowledgeGaps String    @default("[]") @db.Text // JSON array
+  decisions     String    @default("[]") @db.Text // JSON array
   generatedAt   DateTime?
   approvedAt    DateTime?
   updatedAt     DateTime  @updatedAt
@@ -102,9 +103,9 @@ model AgentRun {
   stepNumber   Int
   phase        String    @default("generate") // generate | research | refine
   status       String    @default("pending")  // pending | running | completed | failed | cancelled
-  systemPrompt String    @default("")
-  prompt       String    @default("")
-  result       String?
+  systemPrompt String    @default("") @db.Text
+  prompt       String    @default("") @db.Text
+  result       String?   @db.Text
   turnsUsed    Int       @default(0)
   startedAt    DateTime?
   completedAt  DateTime?
@@ -120,11 +121,30 @@ model AgentMessage {
   runId      String
   run        AgentRun @relation(fields: [runId], references: [id], onDelete: Cascade)
   role       String   // system | user | assistant
-  content    String
+  content    String   @db.Text
   turnNumber Int      @default(0)
   createdAt  DateTime @default(now())
 
   @@index([runId])
+}
+
+// ── Artefacts ────────────────────────────────────────────────────────────
+
+model Artefact {
+  id          String   @id @default(cuid())
+  campaignId  String
+  campaign    Campaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  category    String   // research | direction_setting
+  type        String   // e.g. "market_research", "message_house", "swot", "custom"
+  name        String
+  description String   @default("") @db.Text
+  content     String   @default("") @db.Text // markdown content
+  status      String   @default("draft") // draft | final
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([campaignId])
+  @@index([campaignId, category])
 }
 
 // ── Admin Configuration ──────────────────────────────────────────────────
@@ -147,7 +167,7 @@ model BriefingTemplateQuestion {
   id         String           @id @default(cuid())
   categoryId String
   category   BriefingCategory @relation(fields: [categoryId], references: [id], onDelete: Cascade)
-  question   String
+  question   String           @db.Text
   enabled    Boolean          @default(true)
   sortOrder  Int              @default(0)
   createdAt  DateTime         @default(now())
@@ -163,7 +183,7 @@ model ResearchAgentDef {
   categoryId   String           @unique
   category     BriefingCategory @relation(fields: [categoryId], references: [id], onDelete: Cascade)
   name         String
-  instructions String           @default("") // System prompt / research instructions
+  instructions String           @default("") @db.Text // System prompt / research instructions
   allowedTools String           @default("[\"WebSearch\",\"WebFetch\"]") // JSON array
   maxTurns     Int              @default(10)
   enabled      Boolean          @default(true)
@@ -178,17 +198,16 @@ model StepDef {
   number             Int      @unique
   title              String
   shortTitle         String
-  description        String   @default("")
+  description        String   @default("") @db.Text
   dependsOn          String   @default("[]")  // JSON array of step numbers
-  promptHint         String   @default("")
+  promptHint         String   @default("") @db.Text
   // Config
-  customInstructions String   @default("")
-  outputFormat       String   @default("")
+  customInstructions String   @default("") @db.Text
+  outputFormat       String   @default("") @db.Text
   outputDisplay      String   @default("prose") // prose | bullet-cards | table | kpi-grid | statement-cards
   allowedTools       String   @default("[]") // JSON array of tool names
   maxTurns           Int      @default(10)
   enabled            Boolean  @default(true)
   createdAt          DateTime @default(now())
   updatedAt          DateTime @updatedAt
-
 }

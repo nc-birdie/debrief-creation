@@ -270,11 +270,7 @@ export default function Dashboard() {
                     )}
                   </div>
                   <Link
-                    href={
-                      c.status === "setup"
-                        ? `/campaign/${c.id}/setup`
-                        : `/campaign/${c.id}`
-                    }
+                    href={`/campaign/${c.id}`}
                     className="flex items-center gap-1 text-sm font-medium text-primary hover:underline"
                   >
                     {c.status === "setup" ? "Setup" : "Continue"}

@@ -3,7 +3,9 @@ import { prisma } from "@/lib/db";
 import { isReadableAsText, isBinaryFile } from "@/lib/file-types";
 import type { SourceFileType } from "@/lib/file-types";
 import { areasForPrompt } from "@/lib/knowledge-areas";
+import { runAssessment } from "@/lib/assess";
 import fs from "node:fs";
+import { spawn } from "node:child_process";
 import mammoth from "mammoth";
 // Extract text from office documents
 async function extractDocumentText(
@@ -60,30 +62,90 @@ Rules:
 - The title should be scannable — a reader should get the gist from the title alone
 - The content should be comprehensive — do not truncate or paraphrase away detail
 - If a fact could fit multiple areas, categorize by its primary relevance
-- Use "other" only when no other area fits`;
+- Use "other" only when no other area fits
+
+Return ONLY the JSON object — no other text, explanation, or markdown fences.`;
 
 /**
- * Run extraction via agent SDK. For text files (no tools), uses maxTurns: 1.
- * For binary files (needs Read tool), uses maxTurns: 5.
+ * Run extraction via Claude CLI (`claude -p`).
+ * For text files, passes the prompt directly.
+ * For binary files, uses the agent SDK with Read tools.
  */
 async function extractViaAgent(
   prompt: string,
   allowedTools: string[]
 ): Promise<string> {
-  const { query } = await import("@anthropic-ai/claude-agent-sdk");
-  let agentResult = "";
-  for await (const message of query({
-    prompt,
-    options: {
-      systemPrompt: EXTRACTION_SYSTEM_PROMPT,
-      allowedTools,
-      maxTurns: allowedTools.length > 0 ? 5 : 1,
-    },
-  })) {
-    if ("result" in message) {
-      agentResult = message.result;
-    }
+  // For text content (no tools needed), use claude -p directly — more reliable
+  if (allowedTools.length === 0) {
+    return extractViaCli(prompt);
   }
+
+  // For binary files that need tools, use agent SDK
+  return extractViaAgentSdk(prompt, allowedTools);
+}
+
+function extractViaCli(prompt: string): Promise<string> {
+  return new Promise((resolve) => {
+    console.log(`[ingest] Starting CLI extraction (${prompt.length} char prompt)`);
+
+    const fullPrompt = `${EXTRACTION_SYSTEM_PROMPT}\n\n---\n\n${prompt}`;
+    const child = spawn("claude", ["-p", "--output-format", "text"], {
+      stdio: ["pipe", "pipe", "pipe"],
+      shell: true,
+    });
+
+    let stdout = "";
+    let stderr = "";
+
+    child.stdout.on("data", (data: Buffer) => {
+      stdout += data.toString();
+    });
+    child.stderr.on("data", (data: Buffer) => {
+      stderr += data.toString();
+    });
+
+    child.on("close", (code: number | null) => {
+      if (code !== 0 || stdout.length === 0) {
+        console.warn(`[ingest] CLI exit code ${code}, stderr: ${stderr.slice(0, 300)}`);
+      }
+      console.log(`[ingest] CLI returned ${stdout.length} chars. First 300:`, stdout.slice(0, 300));
+      resolve(stdout.trim());
+    });
+
+    child.on("error", (err: Error) => {
+      console.warn(`[ingest] CLI spawn error:`, err.message);
+      resolve("");
+    });
+
+    child.stdin.write(fullPrompt);
+    child.stdin.end();
+  });
+}
+
+async function extractViaAgentSdk(
+  prompt: string,
+  allowedTools: string[]
+): Promise<string> {
+  const { query } = await import("@anthropic-ai/claude-agent-sdk");
+  console.log(`[ingest] Starting agent SDK extraction (tools: ${allowedTools.join(",")}, maxTurns: 5)`);
+  let agentResult = "";
+  try {
+    for await (const message of query({
+      prompt,
+      options: {
+        systemPrompt: EXTRACTION_SYSTEM_PROMPT,
+        allowedTools,
+        maxTurns: 5,
+      },
+    })) {
+      if ("result" in message) {
+        agentResult = message.result;
+      }
+    }
+  } catch (err) {
+    console.warn(`[ingest] Agent SDK error:`, err);
+  }
+  console.log(`[ingest] Agent SDK returned ${agentResult.length} chars`);
   return agentResult;
 }
 
@@ -153,7 +215,13 @@ export async function POST(
             ].join("\n");
 
             const result = await extractViaAgent(prompt, []);
-            extracted = parseExtractionResult(result, source.name);
+            if (result.length > 0) {
+              extracted = parseExtractionResult(result, source.name);
+            } else {
+              // Agent returned nothing — use text splitting as fallback
+              console.warn(`[ingest] Agent returned empty for ${source.name}, using text split fallback`);
+              extracted = splitTextIntoEntries(truncated, source.name);
+            }
           } else if (isBinaryFile(fileType)) {
             // Slow path: need agent with Read tool for PDFs, images, notebooks
             const prompt = [
@@ -178,7 +246,12 @@ export async function POST(
               .join("\n");
 
             const result = await extractViaAgent(prompt, ["Read", "Glob", "Grep"]);
-            extracted = parseExtractionResult(result, source.name);
+            if (result.length > 0) {
+              extracted = parseExtractionResult(result, source.name);
+            } else {
+              console.warn(`[ingest] Agent returned empty for binary ${source.name}, using fallback`);
+              extracted = await fallbackExtraction(source);
+            }
           } else {
             // Fallback for edge cases
             extracted = await fallbackExtraction(source);
@@ -224,6 +297,37 @@ export async function POST(
     })
   );
 
+  // Collect IDs of all newly created entries for delta assessment
+  const newEntryIds: string[] = [];
+  const successfulIngests = results.filter((r) => r.status === "ingested" && (r.entriesCreated ?? 0) > 0);
+  if (successfulIngests.length > 0) {
+    // Fetch the entry IDs we just created (entries linked to the ingested sources)
+    const sourceIds = successfulIngests.map((r) => r.id);
+    const newEntries = await prisma.knowledgeEntry.findMany({
+      where: { campaignId, sourceId: { in: sourceIds } },
+      select: { id: true },
+    });
+    newEntryIds.push(...newEntries.map((e) => e.id));
+  }
+
+  // Auto-trigger brief assessment in the background
+  if (newEntryIds.length > 0) {
+    const campaign = await prisma.campaign.findUnique({
+      where: { id: campaignId },
+      select: { briefAssessment: true },
+    });
+    const hasPriorAssessment = !!campaign?.briefAssessment;
+
+    // Run assessment in background — don't block the response
+    runAssessment(campaignId, hasPriorAssessment ? newEntryIds : null).catch(
+      (err) => console.warn("[ingest] Auto-assessment failed:", err)
+    );
+
+    console.log(
+      `[ingest] Auto-triggered ${hasPriorAssessment ? "delta" : "full"} assessment with ${newEntryIds.length} new entries`
+    );
+  }
+
   return NextResponse.json({ results });
 }
 
@@ -234,42 +338,57 @@ function parseExtractionResult(
   summary: string;
   entries: Array<{ area: string; title: string; content: string }>;
 } {
-  const fenceMatch = text.match(/```(?:json)?\s*\n([\s\S]*?)\n```/);
-  if (fenceMatch) {
+  // Helper: validate and return parsed result if it has entries
+  function tryParse(
+    json: string
+  ): { summary: string; entries: Array<{ area: string; title: string; content: string }> } | null {
     try {
-      const parsed = JSON.parse(fenceMatch[1]);
+      const parsed = JSON.parse(json);
       if (parsed.entries && Array.isArray(parsed.entries)) {
-        return {
-          summary: parsed.summary || sourceName,
-          entries: parsed.entries.filter(
-            (e: Record<string, unknown>) =>
-              e.area && e.title && e.content
-          ),
-        };
+        const entries = parsed.entries.filter(
+          (e: Record<string, unknown>) => e.area && e.title && e.content
+        );
+        if (entries.length > 0) {
+          return { summary: parsed.summary || sourceName, entries };
+        }
       }
     } catch {
-      /* try next */
+      /* not valid */
     }
+    return null;
   }
 
-  const jsonMatch = text.match(/\{[\s\S]*\}/);
-  if (jsonMatch) {
-    try {
-      const parsed = JSON.parse(jsonMatch[0]);
-      if (parsed.entries && Array.isArray(parsed.entries)) {
-        return {
-          summary: parsed.summary || sourceName,
-          entries: parsed.entries.filter(
-            (e: Record<string, unknown>) =>
-              e.area && e.title && e.content
-          ),
-        };
-      }
-    } catch {
-      /* fallback */
-    }
+  // 1. Try the whole text as JSON (agent returned pure JSON)
+  const direct = tryParse(text.trim());
+  if (direct) return direct;
+
+  // 2. Try code fences (greedy — get the largest fenced block)
+  const fenceMatches = [...text.matchAll(/```(?:json)?\s*\n([\s\S]*?)\n```/g)];
+  for (const match of fenceMatches) {
+    const result = tryParse(match[1]);
+    if (result) return result;
   }
 
+  // 3. Find the outermost JSON object using brace matching
+  const braceResult = extractOutermostJson(text);
+  if (braceResult) {
+    const result = tryParse(braceResult);
+    if (result) return result;
+  }
+
+  // 4. Last resort: try to find any JSON array of entries
+  const arrayMatch = text.match(/\[\s*\{[\s\S]*?\}\s*\]/);
+  if (arrayMatch) {
+    const result = tryParse(`{"summary":"${sourceName}","entries":${arrayMatch[0]}}`);
+    if (result) return result;
+  }
+
+  // 5. Fallback: dump the text as a single entry so nothing is lost,
+  //    but log a warning so we can debug
+  console.warn(
+    `[ingest] JSON extraction failed for ${sourceName}, falling back to raw text (${text.length} chars). First 200 chars:`,
+    text.slice(0, 200)
+  );
   return {
     summary: sourceName,
     entries: [
@@ -280,6 +399,47 @@ function parseExtractionResult(
       },
     ],
   };
+}
+
+/** Walk the string to find the outermost balanced { ... } */
+function extractOutermostJson(text: string): string | null {
+  let start = -1;
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+
+    if (ch === "\\") {
+      escaped = true;
+      continue;
+    }
+
+    if (ch === '"') {
+      inString = !inString;
+      continue;
+    }
+
+    if (inString) continue;
+
+    if (ch === "{") {
+      if (depth === 0) start = i;
+      depth++;
+    } else if (ch === "}") {
+      depth--;
+      if (depth === 0 && start !== -1) {
+        return text.slice(start, i + 1);
+      }
+    }
+  }
+
+  return null;
 }
 
 async function fallbackExtraction(source: {

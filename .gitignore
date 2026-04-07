@@ -34,7 +34,12 @@ yarn-error.log*
 next-env.d.ts
 
 # prisma
+prisma/dev.db
 prisma/dev.db-journal
+
+# uploaded campaign data
+/data/campaigns/
+/data/test-*
 
 # generated
 src/generated/

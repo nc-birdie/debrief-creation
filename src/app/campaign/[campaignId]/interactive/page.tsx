@@ -305,7 +305,7 @@ export default function InteractivePage({
         {generating && (
           <p className="text-xs text-muted-foreground">This can take 5–15 minutes</p>
         )}
-        <Link href={`/campaign/${campaignId}`} className="text-xs text-muted-foreground hover:text-foreground">
+        <Link href={`/campaign/${campaignId}/workshop`} className="text-xs text-muted-foreground hover:text-foreground">
           Back to workspace
         </Link>
       </div>
@@ -326,7 +326,7 @@ export default function InteractivePage({
           <div className="relative max-w-3xl mx-auto">
             <div className="flex items-center gap-2 mb-6">
               <Link
-                href={`/campaign/${campaignId}`}
+                href={`/campaign/${campaignId}/workshop`}
                 className="flex items-center gap-1 text-xs text-white/60 hover:text-white/90"
               >
                 <ArrowLeft className="h-3 w-3" />
