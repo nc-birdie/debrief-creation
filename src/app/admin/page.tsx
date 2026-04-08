@@ -21,6 +21,29 @@ import {
 import type { StepDefinition } from "@/lib/steps/definitions";
 import { cn } from "@/lib/utils";
 
+interface ArtefactTypeData {
+  id: string;
+  typeId: string;
+  label: string;
+  description: string;
+  category: string;
+  sortOrder: number;
+  enabled: boolean;
+  instructions: string;
+  allowedTools: string;
+  maxTurns: number;
+}
+
+interface AgentConfigData {
+  id: string;
+  agentKey: string;
+  name: string;
+  description: string;
+  instructions: string;
+  maxTurns: number;
+  enabled: boolean;
+}
+
 interface ResearchAgentData {
   id: string;
   categoryId: string;
@@ -62,13 +85,19 @@ const DISPLAY_TYPES = [
   { id: "ranked-list", label: "Ranked List", description: "Prioritized items with scores" },
 ];
 
+type TabId = "steps" | "research" | "briefing" | "artefacts" | "agents";
+
 export default function AdminPage() {
-  const [activeTab, setActiveTab] = useState<"steps" | "research" | "briefing">("steps");
+  const [activeTab, setActiveTab] = useState<TabId>("steps");
   const [stepDefs, setStepDefs] = useState<StepDefinition[]>([]);
   const [activeStepId, setActiveStepId] = useState<string | null>(null);
   const [briefingCategories, setBriefingCategories] = useState<BriefingCategoryData[]>([]);
   const [researchAgents, setResearchAgents] = useState<ResearchAgentData[]>([]);
   const [activeResearchAgentId, setActiveResearchAgentId] = useState<string | null>(null);
+  const [artefactTypes, setArtefactTypes] = useState<ArtefactTypeData[]>([]);
+  const [activeArtefactTypeId, setActiveArtefactTypeId] = useState<string | null>(null);
+  const [agentConfigs, setAgentConfigs] = useState<AgentConfigData[]>([]);
+  const [activeAgentConfigId, setActiveAgentConfigId] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [addingStep, setAddingStep] = useState(false);
 
@@ -95,11 +124,31 @@ export default function AdminPage() {
     }
   }, [activeResearchAgentId]);
 
+  const fetchArtefactTypes = useCallback(async () => {
+    const res = await fetch("/api/admin/artefact-types");
+    if (res.ok) {
+      const data: ArtefactTypeData[] = await res.json();
+      setArtefactTypes(data);
+      if (!activeArtefactTypeId && data.length > 0) setActiveArtefactTypeId(data[0].id);
+    }
+  }, [activeArtefactTypeId]);
+
+  const fetchAgentConfigs = useCallback(async () => {
+    const res = await fetch("/api/admin/agent-configs");
+    if (res.ok) {
+      const data: AgentConfigData[] = await res.json();
+      setAgentConfigs(data);
+      if (!activeAgentConfigId && data.length > 0) setActiveAgentConfigId(data[0].id);
+    }
+  }, [activeAgentConfigId]);
+
   useEffect(() => {
     fetchSteps();
     fetchBriefing();
     fetchResearchAgents();
-  }, [fetchSteps, fetchBriefing, fetchResearchAgents]);
+    fetchArtefactTypes();
+    fetchAgentConfigs();
+  }, [fetchSteps, fetchBriefing, fetchResearchAgents, fetchArtefactTypes, fetchAgentConfigs]);
 
   const activeStepDef = stepDefs.find((s) => s.id === activeStepId) ?? null;
 
@@ -181,17 +230,23 @@ export default function AdminPage() {
         {/* Left nav */}
         <nav className="w-64 shrink-0 border-r border-border bg-sidebar overflow-y-auto">
           <div className="p-3 space-y-4">
-            <div className="flex rounded-md border border-border overflow-hidden">
-              {(["steps", "research", "briefing"] as const).map((tab) => (
+            <div className="flex flex-col rounded-md border border-border overflow-hidden">
+              {([
+                { id: "steps" as TabId, label: "Steps" },
+                { id: "research" as TabId, label: "Research" },
+                { id: "briefing" as TabId, label: "Briefing" },
+                { id: "artefacts" as TabId, label: "Artefacts" },
+                { id: "agents" as TabId, label: "Agents" },
+              ]).map((tab) => (
                 <button
-                  key={tab}
-                  onClick={() => setActiveTab(tab)}
+                  key={tab.id}
+                  onClick={() => setActiveTab(tab.id)}
                   className={cn(
-                    "flex-1 py-1.5 text-xs font-medium text-center capitalize",
-                    activeTab === tab ? "bg-primary text-primary-foreground" : "hover:bg-secondary"
+                    "py-2 px-3 text-xs font-medium text-left border-b border-border last:border-b-0",
+                    activeTab === tab.id ? "bg-primary text-primary-foreground" : "hover:bg-secondary"
                   )}
                 >
-                  {tab}
+                  {tab.label}
                 </button>
               ))}
             </div>
@@ -286,6 +341,108 @@ export default function AdminPage() {
                   </div>
                 ))}
               </div>
+            ) : activeTab === "artefacts" ? (
+              <div className="space-y-3">
+                {["research", "direction_setting"].map((cat) => {
+                  const catTypes = artefactTypes.filter((t) => t.category === cat);
+                  return (
+                    <div key={cat}>
+                      <div className="px-2 text-[10px] font-semibold text-muted-foreground uppercase tracking-wide mb-1">
+                        {cat === "research" ? "Research" : "Direction Setting"}
+                      </div>
+                      <div className="space-y-0.5">
+                        {catTypes.map((t) => (
+                          <div key={t.id} className="flex items-center gap-1">
+                            <button
+                              onClick={() => setActiveArtefactTypeId(t.id)}
+                              className={cn(
+                                "flex-1 rounded-md px-2 py-1.5 text-left text-xs truncate",
+                                activeArtefactTypeId === t.id ? "bg-accent text-accent-foreground" : "hover:bg-secondary/60",
+                                !t.enabled && "opacity-50 line-through"
+                              )}
+                            >
+                              {t.label}
+                            </button>
+                            <button
+                              onClick={async () => {
+                                await fetch(`/api/admin/artefact-types/${t.id}`, {
+                                  method: "PATCH",
+                                  headers: { "Content-Type": "application/json" },
+                                  body: JSON.stringify({ enabled: !t.enabled }),
+                                });
+                                fetchArtefactTypes();
+                              }}
+                              className="p-0.5 shrink-0"
+                            >
+                              {t.enabled ? (
+                                <ToggleRight className="h-3.5 w-3.5 text-green-600" />
+                              ) : (
+                                <ToggleLeft className="h-3.5 w-3.5 text-muted-foreground" />
+                              )}
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  );
+                })}
+                <button
+                  onClick={async () => {
+                    const res = await fetch("/api/admin/artefact-types", {
+                      method: "POST",
+                      headers: { "Content-Type": "application/json" },
+                      body: JSON.stringify({
+                        typeId: `custom_${Date.now()}`,
+                        label: "New Artefact Type",
+                        category: "research",
+                      }),
+                    });
+                    if (res.ok) {
+                      const data = await res.json();
+                      setActiveArtefactTypeId(data.id);
+                      await fetchArtefactTypes();
+                    }
+                  }}
+                  className="w-full flex items-center gap-1.5 rounded-md border border-dashed border-border px-2 py-1.5 text-xs text-muted-foreground hover:bg-secondary mt-2"
+                >
+                  <Plus className="h-3 w-3" />
+                  Add Type
+                </button>
+              </div>
+            ) : activeTab === "agents" ? (
+              <div className="space-y-1">
+                {agentConfigs.map((ac) => (
+                  <div key={ac.id} className="flex items-center gap-1">
+                    <button
+                      onClick={() => setActiveAgentConfigId(ac.id)}
+                      className={cn(
+                        "flex-1 rounded-md px-2 py-1.5 text-left text-xs truncate",
+                        activeAgentConfigId === ac.id ? "bg-accent text-accent-foreground" : "hover:bg-secondary/60",
+                        !ac.enabled && "opacity-50"
+                      )}
+                    >
+                      <span className={cn(!ac.enabled && "line-through")}>{ac.name}</span>
+                    </button>
+                    <button
+                      onClick={async () => {
+                        await fetch(`/api/admin/agent-configs/${ac.id}`, {
+                          method: "PATCH",
+                          headers: { "Content-Type": "application/json" },
+                          body: JSON.stringify({ enabled: !ac.enabled }),
+                        });
+                        fetchAgentConfigs();
+                      }}
+                      className="p-0.5 shrink-0"
+                    >
+                      {ac.enabled ? (
+                        <ToggleRight className="h-3.5 w-3.5 text-green-600" />
+                      ) : (
+                        <ToggleLeft className="h-3.5 w-3.5 text-muted-foreground" />
+                      )}
+                    </button>
+                  </div>
+                ))}
+              </div>
             ) : (
               <BriefingSidebar categories={briefingCategories} />
             )}
@@ -326,6 +483,46 @@ export default function AdminPage() {
             <div className="text-center py-20 text-muted-foreground text-sm">Select a research agent to configure.</div>
           ) : activeTab === "briefing" ? (
             <BriefingTemplateEditor categories={briefingCategories} onRefresh={fetchBriefing} />
+          ) : activeTab === "artefacts" && activeArtefactTypeId ? (
+            <ArtefactTypeEditor
+              type={artefactTypes.find((t) => t.id === activeArtefactTypeId)!}
+              onSave={async (updated) => {
+                setSaving(true);
+                await fetch(`/api/admin/artefact-types/${updated.id}`, {
+                  method: "PATCH",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify(updated),
+                });
+                await fetchArtefactTypes();
+                setSaving(false);
+              }}
+              onDelete={async () => {
+                if (!confirm("Delete this artefact type?")) return;
+                await fetch(`/api/admin/artefact-types/${activeArtefactTypeId}`, { method: "DELETE" });
+                setActiveArtefactTypeId(null);
+                await fetchArtefactTypes();
+              }}
+              saving={saving}
+            />
+          ) : activeTab === "artefacts" ? (
+            <div className="text-center py-20 text-muted-foreground text-sm">Select an artefact type to configure.</div>
+          ) : activeTab === "agents" && activeAgentConfigId ? (
+            <AgentConfigEditor
+              config={agentConfigs.find((c) => c.id === activeAgentConfigId)!}
+              onSave={async (updated) => {
+                setSaving(true);
+                await fetch(`/api/admin/agent-configs/${updated.id}`, {
+                  method: "PATCH",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify(updated),
+                });
+                await fetchAgentConfigs();
+                setSaving(false);
+              }}
+              saving={saving}
+            />
+          ) : activeTab === "agents" ? (
+            <div className="text-center py-20 text-muted-foreground text-sm">Select an agent to configure.</div>
           ) : null}
         </main>
       </div>
@@ -704,6 +901,248 @@ function BriefingTemplateEditor({ categories, onRefresh }: { categories: Briefin
           <Plus className="h-4 w-4" /> Add Category
         </button>
       )}
+    </div>
+  );
+}
+
+// ── Artefact Type Editor ──
+
+const ARTEFACT_TOOLS = ["WebSearch", "WebFetch", "Read", "Glob", "Grep"];
+
+function ArtefactTypeEditor({
+  type,
+  onSave,
+  onDelete,
+  saving,
+}: {
+  type: ArtefactTypeData;
+  onSave: (updated: Partial<Omit<ArtefactTypeData, "allowedTools"> & { allowedTools: string[] }> & { id: string }) => void;
+  onDelete: () => void;
+  saving: boolean;
+}) {
+  const [form, setForm] = useState(type);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => { setForm(type); }, [type.id]);
+
+  const tools: string[] = (() => {
+    try { return JSON.parse(form.allowedTools); } catch { return []; }
+  })();
+
+  return (
+    <div className="max-w-2xl space-y-6">
+      <div className="flex items-center justify-between">
+        <h2 className="text-lg font-bold">{form.label}</h2>
+        <button onClick={onDelete} className="flex items-center gap-1 text-xs text-destructive hover:underline">
+          <Trash2 className="h-3 w-3" /> Delete
+        </button>
+      </div>
+
+      <div className="grid grid-cols-2 gap-4">
+        <div>
+          <label className="block text-sm font-medium mb-1">Label</label>
+          <input
+            type="text"
+            value={form.label}
+            onChange={(e) => setForm({ ...form, label: e.target.value })}
+            className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+          />
+        </div>
+        <div>
+          <label className="block text-sm font-medium mb-1">Type ID</label>
+          <input
+            type="text"
+            value={form.typeId}
+            disabled
+            className="w-full rounded-md border border-border bg-secondary px-3 py-2 text-sm text-muted-foreground"
+          />
+        </div>
+      </div>
+
+      <div>
+        <label className="block text-sm font-medium mb-1">Description</label>
+        <input
+          type="text"
+          value={form.description}
+          onChange={(e) => setForm({ ...form, description: e.target.value })}
+          className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+        />
+      </div>
+
+      <div>
+        <label className="block text-sm font-medium mb-1">Category</label>
+        <div className="flex gap-2">
+          {(["research", "direction_setting"] as const).map((cat) => (
+            <label
+              key={cat}
+              className={cn(
+                "flex-1 rounded-md border px-3 py-2 text-center text-xs cursor-pointer",
+                form.category === cat ? "border-primary/40 bg-primary/10 text-primary font-medium" : "border-border hover:bg-secondary"
+              )}
+            >
+              <input type="radio" value={cat} checked={form.category === cat} onChange={() => setForm({ ...form, category: cat })} className="sr-only" />
+              {cat === "research" ? "Research" : "Direction Setting"}
+            </label>
+          ))}
+        </div>
+      </div>
+
+      <div>
+        <label className="block text-sm font-medium mb-1">Generation Instructions</label>
+        <p className="text-xs text-muted-foreground mb-2">
+          System prompt for auto-generating this artefact type. Use <code className="bg-secondary px-1 rounded text-[10px]">{"{{KNOWLEDGE_AREAS}}"}</code> to insert knowledge area definitions.
+        </p>
+        <textarea
+          value={form.instructions}
+          onChange={(e) => setForm({ ...form, instructions: e.target.value })}
+          rows={10}
+          className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring resize-y font-mono"
+          placeholder="System prompt for generating this artefact..."
+        />
+      </div>
+
+      <div>
+        <label className="block text-sm font-medium mb-1">Allowed Tools</label>
+        <div className="flex flex-wrap gap-2">
+          {ARTEFACT_TOOLS.map((tool) => {
+            const checked = tools.includes(tool);
+            return (
+              <label
+                key={tool}
+                className={cn(
+                  "flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-xs cursor-pointer",
+                  checked ? "border-primary/40 bg-primary/10 text-primary" : "border-border hover:bg-secondary"
+                )}
+              >
+                <input
+                  type="checkbox"
+                  checked={checked}
+                  onChange={(e) => {
+                    const next = e.target.checked ? [...tools, tool] : tools.filter((t) => t !== tool);
+                    setForm({ ...form, allowedTools: JSON.stringify(next) });
+                  }}
+                  className="sr-only"
+                />
+                {tool}
+              </label>
+            );
+          })}
+        </div>
+      </div>
+
+      <div>
+        <label className="block text-sm font-medium mb-1">Max Turns</label>
+        <input
+          type="number"
+          value={form.maxTurns}
+          onChange={(e) => setForm({ ...form, maxTurns: parseInt(e.target.value, 10) || 10 })}
+          min={1}
+          max={50}
+          className="w-24 rounded-md border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+        />
+      </div>
+
+      <button
+        onClick={() => onSave({
+          id: form.id,
+          label: form.label,
+          description: form.description,
+          category: form.category,
+          instructions: form.instructions,
+          allowedTools: tools,
+          maxTurns: form.maxTurns,
+        })}
+        disabled={saving}
+        className="flex items-center gap-1.5 rounded-md gradient-bg px-4 py-2 text-sm font-medium text-white hover:opacity-90 disabled:opacity-50"
+      >
+        <Save className="h-3.5 w-3.5" />
+        {saving ? "Saving..." : "Save"}
+      </button>
+    </div>
+  );
+}
+
+// ── Agent Config Editor ──
+
+function AgentConfigEditor({
+  config,
+  onSave,
+  saving,
+}: {
+  config: AgentConfigData;
+  onSave: (updated: Partial<AgentConfigData> & { id: string }) => void;
+  saving: boolean;
+}) {
+  const [form, setForm] = useState(config);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => { setForm(config); }, [config.id]);
+
+  return (
+    <div className="max-w-2xl space-y-6">
+      <div>
+        <h2 className="text-lg font-bold">{form.name}</h2>
+        <p className="text-sm text-muted-foreground mt-0.5">{form.description}</p>
+        <span className="inline-block mt-1 rounded-full bg-secondary px-2 py-0.5 text-[10px] text-muted-foreground font-mono">{form.agentKey}</span>
+      </div>
+
+      <div>
+        <label className="block text-sm font-medium mb-1">Agent Name</label>
+        <input
+          type="text"
+          value={form.name}
+          onChange={(e) => setForm({ ...form, name: e.target.value })}
+          className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+        />
+      </div>
+
+      <div>
+        <label className="block text-sm font-medium mb-1">Description</label>
+        <input
+          type="text"
+          value={form.description}
+          onChange={(e) => setForm({ ...form, description: e.target.value })}
+          className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+        />
+      </div>
+
+      <div>
+        <label className="block text-sm font-medium mb-1">System Prompt</label>
+        <p className="text-xs text-muted-foreground mb-2">
+          The instructions this agent follows. Use <code className="bg-secondary px-1 rounded text-[10px]">{"{{KNOWLEDGE_AREAS}}"}</code> to inject the current knowledge area taxonomy at runtime.
+        </p>
+        <textarea
+          value={form.instructions}
+          onChange={(e) => setForm({ ...form, instructions: e.target.value })}
+          rows={20}
+          className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring resize-y font-mono"
+        />
+      </div>
+
+      <div>
+        <label className="block text-sm font-medium mb-1">Max Turns</label>
+        <input
+          type="number"
+          value={form.maxTurns}
+          onChange={(e) => setForm({ ...form, maxTurns: parseInt(e.target.value, 10) || 10 })}
+          min={1}
+          max={50}
+          className="w-24 rounded-md border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+        />
+      </div>
+
+      <button
+        onClick={() => onSave({
+          id: form.id,
+          name: form.name,
+          description: form.description,
+          instructions: form.instructions,
+          maxTurns: form.maxTurns,
+        })}
+        disabled={saving}
+        className="flex items-center gap-1.5 rounded-md gradient-bg px-4 py-2 text-sm font-medium text-white hover:opacity-90 disabled:opacity-50"
+      >
+        <Save className="h-3.5 w-3.5" />
+        {saving ? "Saving..." : "Save"}
+      </button>
     </div>
   );
 }

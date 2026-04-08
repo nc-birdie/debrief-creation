@@ -106,3 +106,24 @@ export function getResearchTypes(): ArtefactTypeDef[] {
 export function getDirectionSettingTypes(): ArtefactTypeDef[] {
   return ARTEFACT_TYPES.filter((t) => t.category === "direction_setting");
 }
+
+/** Fetches artefact types from the admin API (DB-backed). Falls back to hardcoded. */
+export async function fetchArtefactTypes(): Promise<ArtefactTypeDef[]> {
+  try {
+    const res = await fetch("/api/admin/artefact-types");
+    if (res.ok) {
+      const data = await res.json();
+      return data
+        .filter((t: { enabled: boolean }) => t.enabled)
+        .map((t: { typeId: string; label: string; description: string; category: string }) => ({
+          id: t.typeId,
+          label: t.label,
+          description: t.description,
+          category: t.category as "research" | "direction_setting",
+        }));
+    }
+  } catch {
+    // fallback
+  }
+  return ARTEFACT_TYPES;
+}

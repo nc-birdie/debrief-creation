@@ -12,6 +12,24 @@ export const KNOWLEDGE_AREAS: KnowledgeAreaDef[] = [
       "Product capabilities, technical specifications, differentiators, how it works, architecture, performance characteristics",
   },
   {
+    id: "strategic_context",
+    label: "Strategic Context",
+    description:
+      "Vision, goals, strategic positioning, brand narrative, value propositions, messaging pillars, long-term direction",
+  },
+  {
+    id: "data",
+    label: "Data",
+    description:
+      "Numbers, statistics, market sizing, benchmarks, performance data, ROI figures, case study results, research findings",
+  },
+  {
+    id: "objectives",
+    label: "Objectives",
+    description:
+      "Campaign goals, target KPIs, success metrics, desired outcomes, growth targets, what we want to achieve and how we measure it",
+  },
+  {
     id: "market_context",
     label: "Market Context",
     description:
@@ -34,18 +52,6 @@ export const KNOWLEDGE_AREAS: KnowledgeAreaDef[] = [
     label: "Business Model & GTM",
     description:
       "Pricing, go-to-market approach, channels, partnerships, revenue model, sales motion, customer acquisition",
-  },
-  {
-    id: "data_metrics",
-    label: "Data & Metrics",
-    description:
-      "Numbers, statistics, market sizing, benchmarks, performance data, ROI figures, case study results",
-  },
-  {
-    id: "strategic_context",
-    label: "Strategic Context",
-    description:
-      "Vision, goals, strategic positioning, brand narrative, value propositions, messaging pillars, long-term direction",
   },
   {
     id: "regulatory_compliance",

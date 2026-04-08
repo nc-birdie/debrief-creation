@@ -191,6 +191,40 @@ model ResearchAgentDef {
   updatedAt    DateTime         @updatedAt
 }
 
+// ── Artefact Type Definitions (admin-configurable) ──────────────────
+
+model ArtefactTypeDef {
+  id           String   @id @default(cuid())
+  typeId       String   @unique              // e.g. "market_research"
+  label        String
+  description  String   @default("") @db.Text
+  category     String                         // "research" | "direction_setting"
+  sortOrder    Int      @default(0)
+  enabled      Boolean  @default(true)
+  // AI generation config
+  instructions String   @default("") @db.Text // System prompt for auto-generating this artefact
+  allowedTools String   @default("[]")        // JSON array
+  maxTurns     Int      @default(10)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@index([category])
+}
+
+// ── Agent Configurations (admin-configurable system prompts) ─────────
+
+model AgentConfig {
+  id           String   @id @default(cuid())
+  agentKey     String   @unique              // "ingest" | "interview" | "interview_suggest" | "assessment"
+  name         String
+  description  String   @default("") @db.Text
+  instructions String   @default("") @db.Text // System prompt
+  maxTurns     Int      @default(10)
+  enabled      Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+}
+
 // ── Step Definitions (dynamic, editable from admin) ──────────────────────
 
 model StepDef {

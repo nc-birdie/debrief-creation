@@ -29,6 +29,9 @@ import {
   MoreHorizontal,
   Check,
   ClipboardCheck,
+  Search,
+  Sparkles,
+  Loader2,
 } from "lucide-react";
 import type {
   Campaign,
@@ -39,17 +42,13 @@ import type {
   BriefAssessment,
 } from "@/lib/types";
 import { KNOWLEDGE_AREAS } from "@/lib/knowledge-areas";
-import {
-  ARTEFACT_TYPES,
-  getArtefactType,
-  getResearchTypes,
-  getDirectionSettingTypes,
-} from "@/lib/artefact-types";
+import type { ArtefactTypeDef } from "@/lib/artefact-types";
+import { fetchArtefactTypes } from "@/lib/artefact-types";
 import { cn } from "@/lib/utils";
 import { SourcesManager } from "@/components/campaign/sources-manager";
 import { ServicesSection } from "@/components/campaign/services-section";
 import { BriefAssessmentPanel } from "@/components/campaign/brief-assessment";
-import { AIResearchSection } from "@/components/campaign/ai-research-section";
+import { InterviewerChat } from "@/components/campaign/interviewer-chat";
 
 // Icon + accent color per knowledge area
 const AREA_META: Record<string, { icon: typeof Cpu; accent: string }> = {
@@ -58,8 +57,9 @@ const AREA_META: Record<string, { icon: typeof Cpu; accent: string }> = {
   customer_pain_points: { icon: HeartCrack, accent: "text-rose-500" },
   competitive_landscape: { icon: Swords, accent: "text-orange-500" },
   business_model: { icon: DollarSign, accent: "text-violet-500" },
-  data_metrics: { icon: BarChart3, accent: "text-cyan-500" },
-  strategic_context: { icon: Target, accent: "text-pink-500" },
+  data: { icon: BarChart3, accent: "text-cyan-500" },
+  objectives: { icon: Target, accent: "text-pink-500" },
+  strategic_context: { icon: Compass, accent: "text-pink-500" },
   regulatory_compliance: { icon: Shield, accent: "text-amber-500" },
   organizational: { icon: Building2, accent: "text-indigo-500" },
   other: { icon: Lightbulb, accent: "text-yellow-500" },
@@ -86,6 +86,7 @@ export default function CampaignPage({
       questions: Array<{ id: string; question: string; enabled: boolean }>;
     }>
   >([]);
+  const [artefactTypes, setArtefactTypes] = useState<ArtefactTypeDef[]>([]);
   const [loading, setLoading] = useState(true);
   const [expandedArea, setExpandedArea] = useState<string | null>(null);
   const [showAssessment, setShowAssessment] = useState(false);
@@ -93,6 +94,11 @@ export default function CampaignPage({
   const fetchTemplate = useCallback(async () => {
     const res = await fetch("/api/admin/briefing-template");
     if (res.ok) setBriefingTemplate(await res.json());
+  }, []);
+
+  const fetchArtefactTypesData = useCallback(async () => {
+    const types = await fetchArtefactTypes();
+    setArtefactTypes(types);
   }, []);
 
   const fetchData = useCallback(async () => {
@@ -122,7 +128,8 @@ export default function CampaignPage({
   useEffect(() => {
     fetchData();
     fetchTemplate();
-  }, [fetchData, fetchTemplate]);
+    fetchArtefactTypesData();
+  }, [fetchData, fetchTemplate, fetchArtefactTypesData]);
 
   const grouped = useMemo(() => {
     const map = new Map<string, KnowledgeEntry[]>();
@@ -418,19 +425,13 @@ export default function CampaignPage({
           </div>
         )}
 
-        {/* ── AI Research ── */}
-        {hasContext && (
-          <AIResearchSection
-            campaignId={campaignId}
-            briefAssessment={briefAssessment}
-            onRefresh={fetchData}
-          />
-        )}
-
         {/* ── Artefacts ── */}
         <ArtefactsSection
           campaignId={campaignId}
           artefacts={artefacts}
+          artefactTypes={artefactTypes}
+          hasContext={hasContext}
+          briefAssessment={briefAssessment}
           onRefresh={fetchData}
         />
 
@@ -443,6 +444,12 @@ export default function CampaignPage({
           onStartDebrief={startDebrief}
         />
       </main>
+
+      {/* Interviewer Chat Sidebar */}
+      <InterviewerChat
+        campaignId={campaignId}
+        onKnowledgeRegistered={fetchData}
+      />
     </div>
   );
 }
@@ -452,10 +459,16 @@ export default function CampaignPage({
 function ArtefactsSection({
   campaignId,
   artefacts,
+  artefactTypes,
+  hasContext,
+  briefAssessment,
   onRefresh,
 }: {
   campaignId: string;
   artefacts: Artefact[];
+  artefactTypes: ArtefactTypeDef[];
+  hasContext: boolean;
+  briefAssessment: BriefAssessment | null;
   onRefresh: () => void;
 }) {
   const researchArtefacts = artefacts.filter(
@@ -469,13 +482,12 @@ function ArtefactsSection({
     <div className="space-y-6">
       <h2 className="text-lg font-bold">Artefacts</h2>
 
-      <ArtefactCategorySection
+      <ResearchArtefactsSection
         campaignId={campaignId}
-        category="research"
-        title="Research Artefacts"
-        description="Reports, analyses, and research that inform your strategy"
-        icon={<FlaskConical className="h-4 w-4 text-cyan-500" />}
         artefacts={researchArtefacts}
+        artefactTypes={artefactTypes}
+        hasContext={hasContext}
+        briefAssessment={briefAssessment}
         onRefresh={onRefresh}
       />
 
@@ -486,8 +498,639 @@ function ArtefactsSection({
         description="Strategic deliverables and frameworks that shape your direction"
         icon={<Layers className="h-4 w-4 text-violet-500" />}
         artefacts={directionArtefacts}
+        artefactTypes={artefactTypes}
         onRefresh={onRefresh}
       />
+    </div>
+  );
+}
+
+// ── Research Artefacts Section (combined AI research + artefact management) ──
+
+function ResearchArtefactsSection({
+  campaignId,
+  artefacts,
+  artefactTypes,
+  hasContext,
+  briefAssessment,
+  onRefresh,
+}: {
+  campaignId: string;
+  artefacts: Artefact[];
+  artefactTypes: ArtefactTypeDef[];
+  hasContext: boolean;
+  briefAssessment: BriefAssessment | null;
+  onRefresh: () => void;
+}) {
+  const types = artefactTypes.filter((t) => t.category === "research");
+  const [runningType, setRunningType] = useState<string | null>(null);
+  const [runningAll, setRunningAll] = useState(false);
+  const [runAllCompleted, setRunAllCompleted] = useState<Set<string>>(new Set());
+  const [planningType, setPlanningType] = useState<string | null>(null);
+  const [researchPlan, setResearchPlan] = useState<{
+    summary: string;
+    sections: Array<{
+      title: string;
+      priority: string;
+      description: string;
+      currentCoverage: string;
+      researchFocus: string;
+    }>;
+  } | null>(null);
+  const [showFillGaps, setShowFillGaps] = useState(false);
+  const [fillingGaps, setFillingGaps] = useState(false);
+  const [gapFindings, setGapFindings] = useState<
+    Array<{
+      category: string;
+      findings: Array<{
+        area: string;
+        title: string;
+        content: string;
+        sources: string[];
+      }>;
+      status: string;
+    }>
+  >([]);
+  const [selectedGapFindings, setSelectedGapFindings] = useState<Set<string>>(
+    new Set()
+  );
+  const [importingGaps, setImportingGaps] = useState(false);
+
+  const gapCount = briefAssessment
+    ? briefAssessment.categories.reduce(
+        (s, c) => s + c.questions.filter((q) => q.status === "gap").length,
+        0
+      )
+    : 0;
+  const partialCount = briefAssessment
+    ? briefAssessment.categories.reduce(
+        (s, c) => s + c.questions.filter((q) => q.status === "partial").length,
+        0
+      )
+    : 0;
+
+  async function planResearch(typeId: string) {
+    const typeDef = types.find((t) => t.id === typeId);
+    if (!typeDef) return;
+
+    setPlanningType(typeId);
+    setResearchPlan(null);
+
+    try {
+      const res = await fetch(`/api/campaigns/${campaignId}/research/plan`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          artefactType: typeId,
+          artefactLabel: typeDef.label,
+          artefactDescription: typeDef.description,
+        }),
+      });
+      if (res.ok) {
+        const plan = await res.json();
+        setResearchPlan(plan);
+      } else {
+        setPlanningType(null);
+      }
+    } catch {
+      setPlanningType(null);
+    }
+  }
+
+  function cancelPlan() {
+    setPlanningType(null);
+    setResearchPlan(null);
+  }
+
+  async function executeResearch() {
+    if (!planningType) return;
+    const typeId = planningType;
+    setRunningType(typeId);
+    setPlanningType(null);
+    setResearchPlan(null);
+
+    try {
+      await runSingleResearch(typeId);
+    } catch {
+      /* ignore */
+    }
+
+    setRunningType(null);
+    onRefresh();
+  }
+
+  async function runSingleResearch(typeId: string) {
+    const typeDef = types.find((t) => t.id === typeId);
+    if (!typeDef) return;
+
+    const createRes = await fetch(`/api/campaigns/${campaignId}/artefacts`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        category: "research",
+        type: typeId,
+        name: typeDef.label,
+        description: typeDef.description,
+      }),
+    });
+    if (!createRes.ok) return;
+    const artefact = await createRes.json();
+
+    const res = await fetch(`/api/campaigns/${campaignId}/research`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ artefactType: typeId }),
+    });
+
+    if (!res.ok) return;
+    const data = await res.json();
+    const allFindings = (data.agentResults ?? []).flatMap(
+      (r: { findings: Array<{ content: string }> }) => r.findings
+    );
+
+    if (allFindings.length > 0) {
+      const content = allFindings
+        .map((f: { title: string; content: string; sources?: string[] }) => {
+          let entry = `## ${f.title}\n\n${f.content}`;
+          if (f.sources?.length) entry += `\n\n**Sources:** ${f.sources.join(", ")}`;
+          return entry;
+        })
+        .join("\n\n---\n\n");
+
+      await fetch(`/api/campaigns/${campaignId}/artefacts/${artefact.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ content }),
+      });
+
+      await fetch(`/api/campaigns/${campaignId}/knowledge`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          entries: allFindings.map(
+            (f: { area: string; title: string; content: string; sources?: string[] }) => ({
+              area: f.area,
+              title: f.title,
+              content:
+                f.sources && f.sources.length > 0
+                  ? `${f.content}\n\nSources:\n${f.sources.map((s: string) => `- ${s}`).join("\n")}`
+                  : f.content,
+            })
+          ),
+        }),
+      });
+    }
+  }
+
+  async function runAll() {
+    setRunningAll(true);
+    setRunAllCompleted(new Set());
+
+    await Promise.all(
+      types.map(async (t) => {
+        try {
+          await runSingleResearch(t.id);
+        } catch {
+          /* continue others */
+        }
+        setRunAllCompleted((prev) => new Set([...prev, t.id]));
+      })
+    );
+
+    setRunningAll(false);
+    onRefresh();
+  }
+
+  async function fillGaps() {
+    setFillingGaps(true);
+    setGapFindings([]);
+    setSelectedGapFindings(new Set());
+    try {
+      const res = await fetch(`/api/campaigns/${campaignId}/research`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({}),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        const results = data.agentResults ?? [];
+        setGapFindings(results);
+        const allKeys = new Set<string>();
+        results.forEach(
+          (
+            r: { findings: Array<unknown> },
+            ci: number
+          ) => r.findings.forEach((_: unknown, fi: number) => allKeys.add(`${ci}-${fi}`))
+        );
+        setSelectedGapFindings(allKeys);
+      }
+    } catch {
+      /* ignore */
+    }
+    setFillingGaps(false);
+  }
+
+  const allGapFindings = gapFindings.flatMap((r, ci) =>
+    r.findings.map((f, fi) => ({ ...f, key: `${ci}-${fi}`, category: r.category }))
+  );
+
+  async function importGapFindings() {
+    const toImport = allGapFindings.filter((f) =>
+      selectedGapFindings.has(f.key)
+    );
+    if (toImport.length === 0) return;
+    setImportingGaps(true);
+    await fetch(`/api/campaigns/${campaignId}/knowledge`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        entries: toImport.map((f) => ({
+          area: f.area,
+          title: f.title,
+          content:
+            f.sources?.length > 0
+              ? `${f.content}\n\nSources:\n${f.sources.map((s: string) => `- ${s}`).join("\n")}`
+              : f.content,
+        })),
+      }),
+    });
+    setGapFindings([]);
+    setSelectedGapFindings(new Set());
+    setImportingGaps(false);
+    onRefresh();
+  }
+
+  return (
+    <div className="rounded-lg border border-border bg-card">
+      <div className="px-5 py-4 border-b border-border">
+        <div className="flex items-center gap-3">
+          <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-secondary shrink-0">
+            <FlaskConical className="h-4 w-4 text-cyan-500" />
+          </div>
+          <div className="flex-1 min-w-0">
+            <div className="flex items-center gap-2">
+              <h3 className="text-sm font-semibold">Research</h3>
+              {artefacts.length > 0 && (
+                <span className="rounded-full bg-primary/10 text-primary px-2 py-0.5 text-[10px] font-medium">
+                  {artefacts.length}
+                </span>
+              )}
+            </div>
+            <p className="text-[11px] text-muted-foreground mt-0.5">
+              Launch AI-powered research reports or fill knowledge gaps
+            </p>
+          </div>
+        </div>
+      </div>
+
+      {/* Research type launcher grid */}
+      {hasContext && !planningType && !runningType && !runningAll && (
+        <div className="px-5 py-4 border-b border-border">
+          <p className="text-xs font-medium text-muted-foreground mb-3">
+            Launch a research report
+          </p>
+          <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
+            {types.map((t) => {
+              const existing = artefacts.filter((a) => a.type === t.id);
+              return (
+                <button
+                  key={t.id}
+                  onClick={() => planResearch(t.id)}
+                  className="relative rounded-lg border border-border px-3 py-2.5 text-left transition-all hover:border-primary/30 hover:bg-secondary/30"
+                >
+                  <div className="flex items-center gap-2 mb-0.5">
+                    <Sparkles className="h-3 w-3 text-cyan-500 shrink-0" />
+                    <span className="text-xs font-medium truncate">
+                      {t.label}
+                    </span>
+                  </div>
+                  <p className="text-[10px] text-muted-foreground line-clamp-1 pl-5">
+                    {t.description}
+                  </p>
+                  {existing.length > 0 && (
+                    <span className="absolute top-1.5 right-1.5 flex h-4 w-4 items-center justify-center rounded-full bg-primary/10 text-[9px] font-medium text-primary">
+                      {existing.length}
+                    </span>
+                  )}
+                </button>
+              );
+            })}
+          </div>
+
+          {/* Run all button */}
+          <button
+            onClick={runAll}
+            className="mt-3 w-full rounded-md border border-amber-200 dark:border-amber-900/40 bg-amber-50/50 dark:bg-amber-950/20 px-4 py-3 text-left hover:bg-amber-50 dark:hover:bg-amber-950/30 transition-colors"
+          >
+            <div className="flex items-center gap-2">
+              <Sparkles className="h-3.5 w-3.5 text-amber-500 shrink-0" />
+              <span className="text-xs font-medium">Run all research reports</span>
+            </div>
+            <p className="text-[10px] text-muted-foreground mt-0.5 pl-[22px]">
+              Warning: This will take some time and use a substantial amount of tokens
+            </p>
+          </button>
+
+          {/* Fill gaps from brief assessment */}
+          <button
+            onClick={() =>
+              showFillGaps ? setShowFillGaps(false) : (setShowFillGaps(true), fillGaps())
+            }
+            disabled={fillingGaps || !briefAssessment || (gapCount === 0 && partialCount === 0)}
+            className="mt-2 w-full flex items-center justify-center gap-2 rounded-md border border-dashed border-border px-4 py-2.5 text-xs text-muted-foreground hover:bg-secondary/30 hover:text-foreground transition-colors disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-muted-foreground disabled:cursor-not-allowed"
+          >
+            {fillingGaps ? (
+              <>
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                Researching gaps... This may take a few minutes
+              </>
+            ) : (
+              <>
+                <Search className="h-3.5 w-3.5" />
+                Fill knowledge gaps from brief assessment
+                {briefAssessment && (gapCount > 0 || partialCount > 0) && (
+                  <span className="text-[10px] text-muted-foreground/70">
+                    ({gapCount} gaps, {partialCount} partial)
+                  </span>
+                )}
+              </>
+            )}
+          </button>
+        </div>
+      )}
+
+      {/* Planning state */}
+      {planningType && (
+        <div className="px-5 py-4 border-b border-border">
+          {!researchPlan ? (
+            <div className="flex flex-col items-center gap-3 py-6 text-muted-foreground">
+              <Loader2 className="h-5 w-5 animate-spin" />
+              <p className="text-sm">
+                Analyzing context and planning research for{" "}
+                <span className="font-medium text-foreground">
+                  {types.find((t) => t.id === planningType)?.label}
+                </span>
+                ...
+              </p>
+            </div>
+          ) : (
+            <div className="space-y-4">
+              <div className="flex items-start justify-between gap-4">
+                <div>
+                  <h4 className="text-sm font-semibold flex items-center gap-2">
+                    <FlaskConical className="h-4 w-4 text-cyan-500" />
+                    Research Plan: {types.find((t) => t.id === planningType)?.label}
+                  </h4>
+                  <p className="text-xs text-muted-foreground mt-1">
+                    {researchPlan.summary}
+                  </p>
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                {(["must-have", "should-have", "nice-to-have"] as const).map(
+                  (priority) => {
+                    const sections = researchPlan.sections.filter(
+                      (s) => s.priority === priority
+                    );
+                    if (sections.length === 0) return null;
+                    const colors = {
+                      "must-have": {
+                        badge: "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400",
+                        border: "border-red-200 dark:border-red-900/40",
+                      },
+                      "should-have": {
+                        badge: "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400",
+                        border: "border-amber-200 dark:border-amber-900/40",
+                      },
+                      "nice-to-have": {
+                        badge: "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400",
+                        border: "border-blue-200 dark:border-blue-900/40",
+                      },
+                    };
+                    const c = colors[priority];
+                    return (
+                      <div key={priority} className="space-y-1.5">
+                        <span
+                          className={cn(
+                            "inline-block rounded-full px-2 py-0.5 text-[10px] font-medium",
+                            c.badge
+                          )}
+                        >
+                          {priority} ({sections.length})
+                        </span>
+                        {sections.map((section, i) => (
+                          <div
+                            key={i}
+                            className={cn(
+                              "rounded-md border p-3 space-y-1",
+                              c.border,
+                              "bg-card"
+                            )}
+                          >
+                            <p className="text-xs font-medium">
+                              {section.title}
+                            </p>
+                            <p className="text-[11px] text-muted-foreground">
+                              {section.description}
+                            </p>
+                            {section.currentCoverage &&
+                              section.currentCoverage !== "none" && (
+                                <p className="text-[10px] text-muted-foreground/70">
+                                  <span className="font-medium">
+                                    Current coverage:
+                                  </span>{" "}
+                                  {section.currentCoverage}
+                                </p>
+                              )}
+                            <p className="text-[10px] text-primary/80">
+                              <span className="font-medium">Focus:</span>{" "}
+                              {section.researchFocus}
+                            </p>
+                          </div>
+                        ))}
+                      </div>
+                    );
+                  }
+                )}
+              </div>
+
+              <div className="flex items-center gap-2 pt-1">
+                <button
+                  onClick={executeResearch}
+                  className="flex items-center gap-1.5 rounded-md gradient-bg px-4 py-2 text-sm font-medium text-white hover:opacity-90 transition-opacity"
+                >
+                  <Sparkles className="h-3.5 w-3.5" />
+                  Start Research
+                </button>
+                <button
+                  onClick={cancelPlan}
+                  className="rounded-md border border-border px-4 py-2 text-sm hover:bg-secondary transition-colors"
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Running single state */}
+      {runningType && !runningAll && (
+        <div className="px-5 py-6 border-b border-border">
+          <div className="flex flex-col items-center gap-3 text-muted-foreground">
+            <Loader2 className="h-5 w-5 animate-spin text-primary" />
+            <p className="text-sm">
+              Researching{" "}
+              <span className="font-medium text-foreground">
+                {types.find((t) => t.id === runningType)?.label}
+              </span>
+              ... This may take a few minutes
+            </p>
+          </div>
+        </div>
+      )}
+
+      {/* Running all state */}
+      {runningAll && (
+        <div className="px-5 py-5 border-b border-border space-y-3">
+          <div className="flex items-center gap-2 text-sm font-medium">
+            <Loader2 className="h-4 w-4 animate-spin text-primary" />
+            Running all research reports ({runAllCompleted.size}/{types.length} complete)
+          </div>
+          <div className="space-y-1.5">
+            {types.map((t) => {
+              const done = runAllCompleted.has(t.id);
+              return (
+                <div key={t.id} className="flex items-center gap-2.5 px-1">
+                  {done ? (
+                    <CheckCircle2 className="h-3.5 w-3.5 text-green-500 shrink-0" />
+                  ) : (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground shrink-0" />
+                  )}
+                  <span className={cn("text-xs", done ? "text-foreground" : "text-muted-foreground")}>
+                    {t.label}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* Gap research findings review */}
+      {showFillGaps && allGapFindings.length > 0 && (
+        <div className="border-b border-border">
+          <div className="flex items-center justify-between px-5 py-2.5 bg-secondary/20">
+            <span className="text-xs font-semibold">
+              Gap findings ({selectedGapFindings.size} / {allGapFindings.length}{" "}
+              selected)
+            </span>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() =>
+                  selectedGapFindings.size === allGapFindings.length
+                    ? setSelectedGapFindings(new Set())
+                    : setSelectedGapFindings(
+                        new Set(allGapFindings.map((f) => f.key))
+                      )
+                }
+                className="text-[10px] text-primary hover:underline"
+              >
+                {selectedGapFindings.size === allGapFindings.length
+                  ? "Deselect All"
+                  : "Select All"}
+              </button>
+              <button
+                onClick={importGapFindings}
+                disabled={importingGaps || selectedGapFindings.size === 0}
+                className="flex items-center gap-1 rounded-md gradient-bg px-2.5 py-1 text-[10px] font-medium text-white hover:opacity-90 disabled:opacity-50"
+              >
+                {importingGaps ? (
+                  <Loader2 className="h-2.5 w-2.5 animate-spin" />
+                ) : (
+                  <CheckCircle2 className="h-2.5 w-2.5" />
+                )}
+                Import {selectedGapFindings.size}
+              </button>
+            </div>
+          </div>
+          <div className="divide-y divide-border max-h-[400px] overflow-y-auto">
+            {gapFindings.map(
+              (catResult, ci) =>
+                catResult.status === "ok" &&
+                catResult.findings.length > 0 && (
+                  <div key={ci}>
+                    <div className="px-4 py-2 bg-secondary/10">
+                      <span className="text-[10px] font-semibold text-muted-foreground">
+                        {catResult.category} — {catResult.findings.length}{" "}
+                        findings
+                      </span>
+                    </div>
+                    {catResult.findings.map((finding, fi) => {
+                      const key = `${ci}-${fi}`;
+                      const isSelected = selectedGapFindings.has(key);
+                      return (
+                        <label
+                          key={key}
+                          className={cn(
+                            "flex items-start gap-3 px-4 py-2.5 cursor-pointer transition-colors",
+                            isSelected
+                              ? "bg-primary/5"
+                              : "hover:bg-secondary/30"
+                          )}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={isSelected}
+                            onChange={(e) => {
+                              const next = new Set(selectedGapFindings);
+                              if (e.target.checked) next.add(key);
+                              else next.delete(key);
+                              setSelectedGapFindings(next);
+                            }}
+                            className="mt-0.5 shrink-0 rounded border-border"
+                          />
+                          <div className="flex-1 min-w-0">
+                            <span className="text-xs font-medium">
+                              {finding.title}
+                            </span>
+                            <p className="text-[10px] text-muted-foreground line-clamp-2 mt-0.5">
+                              {finding.content}
+                            </p>
+                          </div>
+                        </label>
+                      );
+                    })}
+                  </div>
+                )
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Existing artefacts */}
+      {artefacts.length > 0 ? (
+        <div className="divide-y divide-border">
+          {artefacts.map((artefact) => (
+            <ArtefactCard
+              key={artefact.id}
+              artefact={artefact}
+              artefactTypes={artefactTypes}
+              campaignId={campaignId}
+              onRefresh={onRefresh}
+            />
+          ))}
+        </div>
+      ) : (
+        !hasContext && (
+          <div className="px-5 py-8 text-center">
+            <p className="text-xs text-muted-foreground">
+              Upload and ingest source documents first to enable AI research.
+            </p>
+          </div>
+        )
+      )}
     </div>
   );
 }
@@ -499,6 +1142,7 @@ function ArtefactCategorySection({
   description,
   icon,
   artefacts,
+  artefactTypes,
   onRefresh,
 }: {
   campaignId: string;
@@ -507,6 +1151,7 @@ function ArtefactCategorySection({
   description: string;
   icon: React.ReactNode;
   artefacts: Artefact[];
+  artefactTypes: ArtefactTypeDef[];
   onRefresh: () => void;
 }) {
   const [showCreate, setShowCreate] = useState(false);
@@ -546,6 +1191,7 @@ function ArtefactCategorySection({
           <CreateArtefactForm
             campaignId={campaignId}
             category={category}
+            artefactTypes={artefactTypes}
             onDone={() => {
               setShowCreate(false);
               onRefresh();
@@ -561,6 +1207,7 @@ function ArtefactCategorySection({
             <ArtefactCard
               key={artefact.id}
               artefact={artefact}
+              artefactTypes={artefactTypes}
               campaignId={campaignId}
               onRefresh={onRefresh}
             />
@@ -579,10 +1226,12 @@ function ArtefactCategorySection({
 
 function ArtefactCard({
   artefact,
+  artefactTypes,
   campaignId,
   onRefresh,
 }: {
   artefact: Artefact;
+  artefactTypes: ArtefactTypeDef[];
   campaignId: string;
   onRefresh: () => void;
 }) {
@@ -593,7 +1242,7 @@ function ArtefactCard({
   const [editContent, setEditContent] = useState(artefact.content);
   const [showMenu, setShowMenu] = useState(false);
 
-  const typeDef = getArtefactType(artefact.type);
+  const typeDef = artefactTypes.find((t) => t.id === artefact.type);
 
   async function save() {
     await fetch(`/api/campaigns/${campaignId}/artefacts/${artefact.id}`, {
@@ -802,24 +1451,26 @@ function ArtefactCard({
 function CreateArtefactForm({
   campaignId,
   category,
+  artefactTypes,
   onDone,
   onCancel,
 }: {
   campaignId: string;
   category: "research" | "direction_setting";
+  artefactTypes: ArtefactTypeDef[];
   onDone: () => void;
   onCancel: () => void;
 }) {
-  const types =
-    category === "research" ? getResearchTypes() : getDirectionSettingTypes();
+  const types = artefactTypes.filter((t) => t.category === category);
   const [selectedType, setSelectedType] = useState(types[0]?.id ?? "");
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
 
   function selectType(typeId: string) {
     setSelectedType(typeId);
-    const typeDef = ARTEFACT_TYPES.find((t) => t.id === typeId);
-    if (typeDef && !name) {
+    const typeDef = types.find((t) => t.id === typeId);
+    const prevTypeDef = types.find((t) => t.id === selectedType);
+    if (typeDef && (!name || name === prevTypeDef?.label)) {
       setName(typeDef.label);
     }
   }

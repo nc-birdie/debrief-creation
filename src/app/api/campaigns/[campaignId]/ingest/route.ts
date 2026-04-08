@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
 import { isReadableAsText, isBinaryFile } from "@/lib/file-types";
 import type { SourceFileType } from "@/lib/file-types";
-import { areasForPrompt } from "@/lib/knowledge-areas";
+import { getAgentConfig } from "@/lib/agent-config";
 import { runAssessment } from "@/lib/assess";
 import fs from "node:fs";
 import { spawn } from "node:child_process";
@@ -34,37 +34,15 @@ async function extractDocumentText(
   return null;
 }
 
-const EXTRACTION_SYSTEM_PROMPT = `You are a B2B marketing analyst extracting structured knowledge from source documents.
-
-Your job is to extract EVERY discrete insight, fact, data point, claim, argument, or piece of context from the document. Do NOT summarize or compress — capture each piece of knowledge as its own entry. Be thorough: it is better to extract too many entries than to miss something that could be relevant later.
-
-Each entry should be self-contained — someone reading just that entry should understand the insight without needing the original document.
-
-Categorize each entry into one of these knowledge areas:
-${areasForPrompt()}
-
-Return JSON with this exact structure:
-{
-  "summary": "One-line description of what this document is about",
-  "entries": [
-    {
-      "area": "product_technology",
-      "title": "Short label for this insight (5-10 words)",
-      "content": "The full insight with all relevant detail preserved. Include specific numbers, names, dates, and context."
-    }
-  ]
+// Loaded from DB at runtime via getAgentConfig("ingest")
+let _cachedIngestPrompt: string | null = null;
+async function getIngestSystemPrompt(): Promise<string> {
+  if (!_cachedIngestPrompt) {
+    const config = await getAgentConfig("ingest");
+    _cachedIngestPrompt = config.instructions;
+  }
+  return _cachedIngestPrompt;
 }
-
-Rules:
-- Extract 10-50+ entries per document depending on density
-- Preserve specific numbers, percentages, dates, names, and quotes
-- Each entry gets exactly one area — pick the best fit
-- The title should be scannable — a reader should get the gist from the title alone
-- The content should be comprehensive — do not truncate or paraphrase away detail
-- If a fact could fit multiple areas, categorize by its primary relevance
-- Use "other" only when no other area fits
-
-Return ONLY the JSON object — no other text, explanation, or markdown fences.`;
 
 /**
  * Run extraction via Claude CLI (`claude -p`).
@@ -84,11 +62,12 @@ async function extractViaAgent(
   return extractViaAgentSdk(prompt, allowedTools);
 }
 
-function extractViaCli(prompt: string): Promise<string> {
+async function extractViaCli(prompt: string): Promise<string> {
+  const systemPrompt = await getIngestSystemPrompt();
   return new Promise((resolve) => {
     console.log(`[ingest] Starting CLI extraction (${prompt.length} char prompt)`);
 
-    const fullPrompt = `${EXTRACTION_SYSTEM_PROMPT}\n\n---\n\n${prompt}`;
+    const fullPrompt = `${systemPrompt}\n\n---\n\n${prompt}`;
     const child = spawn("claude", ["-p", "--output-format", "text"], {
       stdio: ["pipe", "pipe", "pipe"],
       shell: true,
@@ -133,7 +112,7 @@ async function extractViaAgentSdk(
     for await (const message of query({
       prompt,
       options: {
-        systemPrompt: EXTRACTION_SYSTEM_PROMPT,
+        systemPrompt: await getIngestSystemPrompt(),
         allowedTools,
         maxTurns: 5,
       },

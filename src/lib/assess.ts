@@ -1,5 +1,6 @@
 import { prisma } from "@/lib/db";
 import { getAreaLabel } from "@/lib/knowledge-areas";
+import { getAgentConfig } from "@/lib/agent-config";
 import type { BriefAssessment, CoverageStatus } from "@/lib/types";
 import { spawn } from "node:child_process";
 
@@ -65,56 +66,7 @@ function templateForPrompt(categories: DbCategory[]): string {
     .join("\n\n");
 }
 
-const ASSESSMENT_SYSTEM_PROMPT = `You are a B2B marketing strategist assessing briefing readiness for a campaign.
-
-You will receive:
-1. A program context (structured knowledge entries organized by area)
-2. A list of briefing questions grouped by category
-
-Your task: For EACH briefing question, determine whether the program context provides sufficient information to answer it.
-
-For each question, assign one of these statuses:
-- "covered": The program context contains clear, specific information that answers this question
-- "partial": The program context has some relevant information but it's incomplete, vague, or needs more detail
-- "gap": The program context has no meaningful information to answer this question
-
-Be strict: vague or generic information counts as "partial", not "covered". A question is only "covered" if someone could write a confident, specific answer based solely on the program context.
-
-Return JSON with this exact structure:
-{
-  "categories": [
-    {
-      "categoryId": "the_id_in_brackets_before_the_category_name",
-      "questions": [
-        {
-          "questionId": "the_id_in_brackets_before_each_question",
-          "status": "covered|partial|gap",
-          "evidence": "Brief explanation of what we know (if covered/partial) or what's missing (if gap)",
-          "entryIds": []
-        }
-      ]
-    }
-  ],
-  "overallScore": 42,
-  "summary": "2-3 sentence summary of overall readiness, highlighting critical gaps"
-}
-
-CRITICAL: Use the EXACT IDs shown in [brackets] before each category and question.
-The overallScore is a percentage (0-100) of questions that are "covered".
-Include EVERY question from EVERY category — do not skip any.
-Return ONLY the JSON object — no other text.`;
-
-const DELTA_SYSTEM_PROMPT = `You are a B2B marketing strategist updating a briefing readiness assessment with newly added knowledge.
-
-You will receive:
-1. The current assessment (with existing statuses and evidence per question)
-2. NEW knowledge entries that were just added to the program context
-3. The briefing questions
-
-Your task: Review ONLY the questions currently marked as "gap" or "partial". For each, check if the NEW entries improve coverage. If so, upgrade the status and update the evidence. Do NOT downgrade any existing "covered" questions.
-
-Return the FULL updated assessment JSON with the same structure. Include ALL categories and ALL questions (even ones you didn't change).
-Return ONLY the JSON object — no other text.`;
+// Loaded from DB via getAgentConfig at runtime
 
 function callCli(prompt: string): Promise<string> {
   return new Promise((resolve) => {
@@ -183,8 +135,9 @@ export async function runAssessment(
       })
       .join("\n\n");
 
+    const deltaConfig = await getAgentConfig("assessment_delta");
     const prompt = [
-      DELTA_SYSTEM_PROMPT, "", "---", "",
+      deltaConfig.instructions, "", "---", "",
       `== CURRENT ASSESSMENT ==`,
       JSON.stringify(existingAssessment, null, 2), "",
       `== NEW KNOWLEDGE ENTRIES (just added) ==`,
@@ -205,8 +158,9 @@ export async function runAssessment(
       })
       .join("\n\n");
 
+    const assessConfig = await getAgentConfig("assessment");
     const prompt = [
-      ASSESSMENT_SYSTEM_PROMPT, "", "---", "",
+      assessConfig.instructions, "", "---", "",
       `Assess the briefing readiness of this campaign.`, "",
       `== PROGRAM CONTEXT ==`,
       programContextText, "",
